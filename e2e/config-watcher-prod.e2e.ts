@@ -287,6 +287,130 @@ test.describe('Config watcher — production mode auto-discovery', () => {
     }
   });
 
+  test('MCP client receives tools/list_changed notification after config.json adds a plugin in production mode', async () => {
+    let configDir: string | undefined;
+    let server: McpServer | undefined;
+    let client: McpClient | undefined;
+    try {
+      // Start with empty config (no plugins)
+      configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opentabs-e2e-cwp-notif-'));
+      writeTestConfig(configDir, { localPlugins: [], tools: {} });
+
+      // Start server in production mode (no --dev flag)
+      server = await startMcpServer(configDir, false, undefined, undefined, true);
+      client = createMcpClient(server.port, server.secret);
+      await client.initialize();
+
+      // The session ID is set after initialize — we need it to open the SSE GET stream.
+      const sessionId = client.sessionId;
+      if (!sessionId) throw new Error('No session ID after initialize');
+
+      // Capture port and secret into local variables so they're safely usable
+      // inside the Promise closure without optional chaining (server is defined here).
+      const serverPort = server.port;
+      const serverSecret = server.secret;
+
+      // Open a GET /mcp SSE connection to receive server-pushed notifications.
+      // The server sends notifications/tools/list_changed through this stream.
+      const notificationReceived = new Promise<void>((resolve, reject) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error('Timed out waiting for tools/list_changed notification (15s)'));
+        }, 15_000);
+
+        const headers: Record<string, string> = {
+          Accept: 'text/event-stream',
+          'mcp-session-id': sessionId,
+        };
+        if (serverSecret) {
+          headers.Authorization = `Bearer ${serverSecret}`;
+        }
+
+        fetch(`http://localhost:${serverPort}/mcp`, {
+          headers,
+          signal: controller.signal,
+        })
+          .then(async res => {
+            if (!res.ok || !res.body) {
+              reject(new Error(`GET /mcp failed: ${res.status}`));
+              return;
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                // Parse SSE data lines
+                const lines = buffer.split('\n');
+                buffer = lines.pop() ?? '';
+
+                for (const line of lines) {
+                  if (!line.startsWith('data:')) continue;
+                  const raw = line.slice('data:'.length).trim();
+                  if (!raw) continue;
+                  try {
+                    const msg = JSON.parse(raw) as Record<string, unknown>;
+                    if (msg.method === 'notifications/tools/list_changed') {
+                      clearTimeout(timeout);
+                      controller.abort();
+                      resolve();
+                      return;
+                    }
+                  } catch {
+                    // non-JSON SSE line, skip
+                  }
+                }
+              }
+            } catch (err) {
+              // AbortError is expected when we resolve early — ignore it.
+              const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'));
+              if (!isAbort) {
+                reject(err as Error);
+              }
+            }
+          })
+          .catch(err => {
+            const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'));
+            if (!isAbort) {
+              reject(err as Error);
+            }
+          });
+      });
+
+      // Wait for config watcher to be set up
+      await waitForLog(server, 'Config watcher: Watching', 10_000);
+
+      // Write config.json with the e2e-test plugin path — the config watcher
+      // should detect the change, trigger a reload, and send tools/list_changed
+      const absPluginPath = path.resolve(E2E_TEST_PLUGIN_DIR);
+      const prefixedToolNames = readPluginToolNames();
+      const tools: Record<string, boolean> = {};
+      for (const t of prefixedToolNames) {
+        tools[t] = true;
+      }
+      writeTestConfig(configDir, { localPlugins: [absPluginPath], tools });
+
+      // Wait for the notification to arrive on the SSE stream
+      await notificationReceived;
+
+      // After receiving the notification, verify the new tools are visible
+      const toolsAfter = await client.listTools();
+      const e2eTools = toolsAfter.filter(t => t.name.startsWith('e2e-test_'));
+      expect(e2eTools.length).toBe(prefixedToolNames.length);
+    } finally {
+      await client?.close();
+      await server?.kill();
+      if (configDir) cleanupTestConfigDir(configDir);
+    }
+  });
+
   test('adding a plugin path to config.json auto-discovers plugin tools in production mode', async () => {
     let configDir: string | undefined;
     let server: McpServer | undefined;
