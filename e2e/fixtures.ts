@@ -85,6 +85,8 @@ interface PluginDetail {
   displayName: string;
   /** Number of tools registered by this plugin. */
   toolCount: number;
+  /** Effective URL patterns (static + patterns derived from url-type settings). */
+  urlPatterns: string[];
   /** Current tab state: 'closed', 'unavailable', or 'ready'. */
   tabState: string;
   /** Discovery source: 'local' (localPlugins) or 'npm' (auto-discovered). */

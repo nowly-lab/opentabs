@@ -82,6 +82,65 @@ test.describe('Config watcher — production mode auto-discovery', () => {
     }
   });
 
+  test('settings change derives new URL patterns in production mode', async () => {
+    let configDir: string | undefined;
+    let server: McpServer | undefined;
+    let client: McpClient | undefined;
+    try {
+      // Start with the e2e-test plugin registered but no settings
+      const absPluginPath = path.resolve(E2E_TEST_PLUGIN_DIR);
+      const prefixedToolNames = readPluginToolNames();
+      const tools: Record<string, boolean> = {};
+      for (const t of prefixedToolNames) {
+        tools[t] = true;
+      }
+
+      configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opentabs-e2e-cwp-settings-'));
+      writeTestConfig(configDir, { localPlugins: [absPluginPath], tools });
+
+      // Start server in production mode (no --dev flag)
+      server = await startMcpServer(configDir, false, undefined, undefined, true);
+      client = createMcpClient(server.port, server.secret);
+      await client.initialize();
+
+      // Wait for config watcher to be set up
+      await waitForLog(server, 'Config watcher: Watching', 10_000);
+
+      // Write config.json adding url-type settings for two instances
+      writeTestConfig(configDir, {
+        localPlugins: [absPluginPath],
+        tools,
+        settings: {
+          'e2e-test': {
+            instanceUrl: {
+              prod: 'https://example.com',
+              staging: 'https://staging.example.com',
+            },
+          },
+        },
+      });
+
+      // Poll health endpoint until both derived URL patterns appear — the config
+      // watcher should detect the change and trigger a reload without POST /reload
+      const health = await server.waitForHealth(h => {
+        const plugin = h.pluginDetails?.find(p => p.name === 'e2e-test');
+        if (!plugin) return false;
+        return (
+          plugin.urlPatterns.includes('*://example.com/*') && plugin.urlPatterns.includes('*://staging.example.com/*')
+        );
+      }, 15_000);
+
+      const plugin = health.pluginDetails?.find(p => p.name === 'e2e-test');
+      expect(plugin).toBeDefined();
+      expect(plugin?.urlPatterns).toContain('*://example.com/*');
+      expect(plugin?.urlPatterns).toContain('*://staging.example.com/*');
+    } finally {
+      await client?.close();
+      await server?.kill();
+      if (configDir) cleanupTestConfigDir(configDir);
+    }
+  });
+
   test('adding a plugin path to config.json auto-discovers plugin tools in production mode', async () => {
     let configDir: string | undefined;
     let server: McpServer | undefined;

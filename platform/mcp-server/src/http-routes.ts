@@ -341,6 +341,7 @@ const handleHealth = async (
       displayName: p.displayName,
       toolCount: p.tools.length,
       tools: p.tools.map(t => prefixedToolName(p.name, t.name)),
+      urlPatterns: p.urlPatterns,
       tabState: tabInfo?.state ?? 'closed',
       tabs: tabInfo?.tabs ?? [],
       source: p.source,
