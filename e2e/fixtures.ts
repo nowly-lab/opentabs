@@ -493,12 +493,14 @@ interface McpServer {
  * isolated per-server because each proxy has its own PID.
  *
  * In non-hot mode, spawns dist/index.js --dev directly.
+ * In prod mode (prodMode=true), spawns dist/index.js without --dev for production-mode testing.
  */
 const startMcpServer = (
   configDir: string,
   hot: boolean = true,
   explicitPort?: number,
   envOverrides?: Record<string, string | undefined>,
+  prodMode?: boolean,
 ): Promise<McpServer> =>
   new Promise<McpServer>((resolve, reject) => {
     // Fail fast if configDir resolves to the real ~/.opentabs directory.
@@ -528,9 +530,12 @@ const startMcpServer = (
 
     // Hot mode: spawn the dev proxy, which forks dist/index.js as a worker
     // and restarts it on SIGUSR1. Non-hot: spawn dist/index.js --dev directly.
+    // Prod mode: spawn dist/index.js without --dev to test production behavior.
     const nodeArgs = hot
       ? [path.join(SERVER_DIST_DIR, 'dev-proxy.js')]
-      : [path.join(SERVER_DIST_DIR, 'index.js'), '--dev'];
+      : prodMode
+        ? [path.join(SERVER_DIST_DIR, 'index.js')]
+        : [path.join(SERVER_DIST_DIR, 'index.js'), '--dev'];
 
     const proc = spawn('node', nodeArgs, {
       cwd: ROOT,
