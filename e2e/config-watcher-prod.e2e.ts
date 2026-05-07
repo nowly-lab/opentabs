@@ -29,6 +29,59 @@ import { BROWSER_TOOL_NAMES, waitForLog, waitForToolList } from './helpers.js';
 // ---------------------------------------------------------------------------
 
 test.describe('Config watcher — production mode auto-discovery', () => {
+  test('removing a plugin path from config.json auto-removes plugin tools in production mode', async () => {
+    let configDir: string | undefined;
+    let server: McpServer | undefined;
+    let client: McpClient | undefined;
+    try {
+      // Start with the e2e-test plugin registered
+      const absPluginPath = path.resolve(E2E_TEST_PLUGIN_DIR);
+      const prefixedToolNames = readPluginToolNames();
+      const tools: Record<string, boolean> = {};
+      for (const t of prefixedToolNames) {
+        tools[t] = true;
+      }
+
+      configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opentabs-e2e-cwp-remove-'));
+      writeTestConfig(configDir, { localPlugins: [absPluginPath], tools });
+
+      // Start server in production mode (no --dev flag)
+      server = await startMcpServer(configDir, false, undefined, undefined, true);
+      client = createMcpClient(server.port, server.secret);
+      await client.initialize();
+
+      // Verify plugin tools are present initially
+      const toolsBefore = await client.listTools();
+      const e2eToolsBefore = toolsBefore.filter(t => t.name.startsWith('e2e-test_'));
+      expect(e2eToolsBefore.length).toBe(prefixedToolNames.length);
+
+      // Wait for config watcher to be set up
+      await waitForLog(server, 'Config watcher: Watching', 10_000);
+
+      // Remove the plugin from config.json
+      writeTestConfig(configDir, { localPlugins: [], tools: {} });
+
+      // Poll until plugin tools disappear — the config watcher should auto-detect
+      // the change without any manual reload
+      const toolsAfter = await waitForToolList(
+        client,
+        list => !list.some(t => t.name.startsWith('e2e-test_')),
+        15_000,
+        300,
+        'e2e-test plugin tools to disappear after config.json change in production mode',
+      );
+
+      // Browser tools should still be present
+      for (const bt of BROWSER_TOOL_NAMES) {
+        expect(toolsAfter.map(t => t.name)).toContain(bt);
+      }
+    } finally {
+      await client?.close();
+      await server?.kill();
+      if (configDir) cleanupTestConfigDir(configDir);
+    }
+  });
+
   test('adding a plugin path to config.json auto-discovers plugin tools in production mode', async () => {
     let configDir: string | undefined;
     let server: McpServer | undefined;
