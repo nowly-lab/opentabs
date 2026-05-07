@@ -34,7 +34,7 @@ const getToken = (): string | null => {
   try {
     const data = JSON.parse(entry.value) as Auth0CacheEntry;
     if (!data.body?.access_token) return null;
-    if (data.expiresAt && data.expiresAt * 1000 < Date.now()) return null;
+    if (data.expiresAt && data.expiresAt < Math.floor(Date.now() / 1000)) return null;
     return data.body.access_token;
   } catch {
     return null;
@@ -42,23 +42,17 @@ const getToken = (): string | null => {
 };
 
 const getAuth = (): TemporalAuth | null => {
-  const cached = getAuthCache<TemporalAuth>('temporal-cloud');
-  if (cached) {
-    const freshToken = getToken();
-    if (freshToken && freshToken !== cached.token) {
-      const updated = { token: freshToken };
-      setAuthCache('temporal-cloud', updated);
-      return updated;
-    }
-    return cached;
+  const freshToken = getToken();
+  if (freshToken) {
+    const cached = getAuthCache<TemporalAuth>('temporal-cloud');
+    if (cached?.token === freshToken) return cached;
+    const auth: TemporalAuth = { token: freshToken };
+    setAuthCache('temporal-cloud', auth);
+    return auth;
   }
 
-  const token = getToken();
-  if (!token) return null;
-
-  const auth: TemporalAuth = { token };
-  setAuthCache('temporal-cloud', auth);
-  return auth;
+  clearAuthCache('temporal-cloud');
+  return null;
 };
 
 export const isAuthenticated = (): boolean => getAuth() !== null;
@@ -96,7 +90,10 @@ export const api = async <T>(
   query?: Record<string, string | number | boolean | undefined>,
 ): Promise<T> => {
   const auth = getAuth();
-  if (!auth) throw ToolError.auth('Not authenticated — please log in to Temporal Cloud.');
+  if (!auth)
+    throw ToolError.auth(
+      'Not authenticated — token may have expired. Please refresh the Temporal Cloud page to obtain a new token.',
+    );
 
   const baseUrl = `https://${namespace}.web.tmprl.cloud/api/v1`;
   const qs = query ? buildQueryString(query) : '';
