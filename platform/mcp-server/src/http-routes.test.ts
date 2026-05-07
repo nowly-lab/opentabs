@@ -289,6 +289,7 @@ interface HealthResponse {
     displayName: string;
     toolCount: number;
     urlPatterns: string[];
+    permission: 'off' | 'ask' | 'auto';
     tabState: string;
     source: string;
   }[];

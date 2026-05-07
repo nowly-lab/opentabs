@@ -24,6 +24,13 @@ import {
 } from './fixtures.js';
 import { BROWSER_TOOL_NAMES, waitForLog, waitForToolList } from './helpers.js';
 
+/** Read the version string from the e2e-test plugin's package.json. */
+const readE2eTestPluginVersion = (): string => {
+  const pkgPath = path.join(E2E_TEST_PLUGIN_DIR, 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as { version: string };
+  return pkg.version;
+};
+
 // ---------------------------------------------------------------------------
 // Config watcher — production mode auto-discovery
 // ---------------------------------------------------------------------------
@@ -134,6 +141,78 @@ test.describe('Config watcher — production mode auto-discovery', () => {
       expect(plugin).toBeDefined();
       expect(plugin?.urlPatterns).toContain('*://example.com/*');
       expect(plugin?.urlPatterns).toContain('*://staging.example.com/*');
+    } finally {
+      await client?.close();
+      await server?.kill();
+      if (configDir) cleanupTestConfigDir(configDir);
+    }
+  });
+
+  test('permission change in config.json takes effect in production mode', async () => {
+    let configDir: string | undefined;
+    let server: McpServer | undefined;
+    let client: McpClient | undefined;
+    try {
+      const absPluginPath = path.resolve(E2E_TEST_PLUGIN_DIR);
+      const pluginVersion = readE2eTestPluginVersion();
+      const prefixedToolNames = readPluginToolNames();
+      const tools: Record<string, boolean> = {};
+      for (const t of prefixedToolNames) {
+        tools[t] = true;
+      }
+
+      // Start with e2e-test plugin registered but permission explicitly set to 'off'
+      configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'opentabs-e2e-cwp-perm-'));
+      writeTestConfig(configDir, {
+        localPlugins: [absPluginPath],
+        tools,
+        permissions: {
+          browser: { permission: 'auto' },
+          'e2e-test': { permission: 'off' },
+        },
+      });
+
+      // Start server in production mode without OPENTABS_DANGEROUSLY_SKIP_PERMISSIONS
+      // so permission checks are actually enforced
+      server = await startMcpServer(
+        configDir,
+        false,
+        undefined,
+        { OPENTABS_DANGEROUSLY_SKIP_PERMISSIONS: undefined },
+        true,
+      );
+      client = createMcpClient(server.port, server.secret);
+      await client.initialize();
+
+      // Verify initial health shows permission 'off' for e2e-test plugin
+      const initialHealth = await server.health();
+      const initialPlugin = initialHealth?.pluginDetails?.find(p => p.name === 'e2e-test');
+      expect(initialPlugin).toBeDefined();
+      expect(initialPlugin?.permission).toBe('off');
+
+      // Wait for config watcher to be set up
+      await waitForLog(server, 'Config watcher: Watching', 10_000);
+
+      // Update config.json to set permission to 'auto' with a reviewedVersion
+      writeTestConfig(configDir, {
+        localPlugins: [absPluginPath],
+        tools,
+        permissions: {
+          browser: { permission: 'auto' },
+          'e2e-test': { permission: 'auto', reviewedVersion: pluginVersion },
+        },
+      });
+
+      // Poll health endpoint until the plugin's permission changes to 'auto' —
+      // the config watcher should detect the change without POST /reload
+      const health = await server.waitForHealth(h => {
+        const plugin = h.pluginDetails?.find(p => p.name === 'e2e-test');
+        return plugin?.permission === 'auto';
+      }, 15_000);
+
+      const plugin = health.pluginDetails?.find(p => p.name === 'e2e-test');
+      expect(plugin).toBeDefined();
+      expect(plugin?.permission).toBe('auto');
     } finally {
       await client?.close();
       await server?.kill();

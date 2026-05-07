@@ -87,6 +87,8 @@ interface PluginDetail {
   toolCount: number;
   /** Effective URL patterns (static + patterns derived from url-type settings). */
   urlPatterns: string[];
+  /** Effective permission for the plugin: 'off', 'ask', or 'auto'. */
+  permission: 'off' | 'ask' | 'auto';
   /** Current tab state: 'closed', 'unavailable', or 'ready'. */
   tabState: string;
   /** Discovery source: 'local' (localPlugins) or 'npm' (auto-discovered). */
