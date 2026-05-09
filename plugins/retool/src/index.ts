@@ -44,6 +44,8 @@ import { listWorkflows } from './tools/list-workflows.js';
 import { lookupApp } from './tools/lookup-app.js';
 import { moveResourceToFolder } from './tools/move-resource-to-folder.js';
 import { renameFolder } from './tools/rename-folder.js';
+import { runGrpc } from './tools/run-grpc.js';
+import { runQuery } from './tools/run-query.js';
 import { savePage } from './tools/save-page.js';
 
 class RetoolPlugin extends OpenTabsPlugin {
@@ -114,6 +116,8 @@ class RetoolPlugin extends OpenTabsPlugin {
     getSourceControlSettings,
     // Queries
     listPlaygroundQueries,
+    runQuery,
+    runGrpc,
     // Database
     listGrids,
     // Agents
