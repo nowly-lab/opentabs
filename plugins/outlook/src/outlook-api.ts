@@ -91,8 +91,10 @@ const findMsalModernTokens = (version: '2' | '3', clientId: string, host: string
       const target: string = parsed.target ?? '';
       if (!scopeClaimHasHost(target, host)) continue;
 
-      const expiresOn = Number.parseInt(String(parsed.expiresOn), 10);
-      if (!Number.isFinite(expiresOn) || expiresOn * 1000 < Date.now()) continue;
+      // Strict numeric coercion — Number.parseInt would accept '9999999999junk'
+      // as a giant future expiry; Number(...) returns NaN for trailing garbage.
+      const expiresOn = Number(parsed.expiresOn);
+      if (!Number.isInteger(expiresOn) || expiresOn <= 0 || expiresOn * 1000 < Date.now()) continue;
 
       matches.push({ token: parsed.secret, apiBase });
     } catch {
@@ -123,8 +125,8 @@ const findMsalV1Tokens = (clientId: string): OutlookAuth[] => {
     try {
       const parsed = JSON.parse(raw);
       if (typeof parsed.secret !== 'string' || parsed.secret.length === 0) continue;
-      const expiresOn = Number.parseInt(String(parsed.expiresOn), 10);
-      if (!Number.isFinite(expiresOn) || expiresOn * 1000 < Date.now()) continue;
+      const expiresOn = Number(parsed.expiresOn);
+      if (!Number.isInteger(expiresOn) || expiresOn <= 0 || expiresOn * 1000 < Date.now()) continue;
       matches.push({ token: parsed.secret, apiBase: GRAPH_API_BASE });
     } catch {
       // skip invalid entries
