@@ -2,7 +2,6 @@ import {
   ToolError,
   buildQueryString,
   clearAuthCache,
-  findLocalStorageEntry,
   getAuthCache,
   getLocalStorage,
   setAuthCache,
@@ -22,6 +21,28 @@ interface OutlookAuth {
   token: string;
   apiBase: string; // which API base URL this token works with
 }
+
+/**
+ * Enumerate every MSAL client id whose token-index key starts with `prefix`.
+ * The SDK's `findLocalStorageEntry` returns only the first match, which silently
+ * drops every additional client id present when a user has multiple Microsoft
+ * apps signed in.
+ */
+const findAllMsalClientIds = (prefix: string): string[] => {
+  const ids: string[] = [];
+  try {
+    const storage = window.localStorage;
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key?.startsWith(prefix)) {
+        ids.push(key.slice(prefix.length));
+      }
+    }
+  } catch {
+    // SecurityError or missing localStorage — nothing we can do
+  }
+  return ids;
+};
 
 /**
  * True when the AAD scope claim (space-separated) contains at least one scope
@@ -70,8 +91,8 @@ const findMsalModernTokens = (version: '2' | '3', clientId: string, host: string
       const target: string = parsed.target ?? '';
       if (!scopeClaimHasHost(target, host)) continue;
 
-      const expiresOn = Number.parseInt(parsed.expiresOn, 10);
-      if (expiresOn && expiresOn * 1000 < Date.now()) continue;
+      const expiresOn = Number.parseInt(String(parsed.expiresOn), 10);
+      if (!Number.isFinite(expiresOn) || expiresOn * 1000 < Date.now()) continue;
 
       matches.push({ token: parsed.secret, apiBase });
     } catch {
@@ -102,8 +123,8 @@ const findMsalV1Tokens = (clientId: string): OutlookAuth[] => {
     try {
       const parsed = JSON.parse(raw);
       if (typeof parsed.secret !== 'string' || parsed.secret.length === 0) continue;
-      const expiresOn = Number.parseInt(parsed.expiresOn, 10);
-      if (expiresOn && expiresOn * 1000 < Date.now()) continue;
+      const expiresOn = Number.parseInt(String(parsed.expiresOn), 10);
+      if (!Number.isFinite(expiresOn) || expiresOn * 1000 < Date.now()) continue;
       matches.push({ token: parsed.secret, apiBase: GRAPH_API_BASE });
     } catch {
       // skip invalid entries
@@ -130,19 +151,19 @@ const collectAuthCandidates = (): OutlookAuth[] => {
   // Consumer v1
   all.push(...findMsalV1Tokens(MSAL_CLIENT_ID_CONSUMER));
 
-  // Fallback: any other client id present, modern formats then v1
+  // Fallback: every other client id present in localStorage, modern then v1.
+  // Enumerate (not first-match) so users with multiple Microsoft apps signed in
+  // surface every token, not just the first index key the iterator hits.
   for (const version of ['3', '2'] as const) {
-    const entry = findLocalStorageEntry(key => key.startsWith(`msal.${version}.token.keys.`));
-    if (!entry) continue;
-    const cid = entry.key.replace(`msal.${version}.token.keys.`, '');
-    if (cid === MSAL_CLIENT_ID) continue;
-    all.push(...findMsalModernTokens(version, cid, 'graph.microsoft.com'));
-    all.push(...findMsalModernTokens(version, cid, 'outlook.office.com'));
+    for (const cid of findAllMsalClientIds(`msal.${version}.token.keys.`)) {
+      if (cid === MSAL_CLIENT_ID) continue;
+      all.push(...findMsalModernTokens(version, cid, 'graph.microsoft.com'));
+      all.push(...findMsalModernTokens(version, cid, 'outlook.office.com'));
+    }
   }
-  const v1Entry = findLocalStorageEntry(key => key.startsWith('msal.token.keys.'));
-  if (v1Entry) {
-    const cid = v1Entry.key.replace('msal.token.keys.', '');
-    if (cid !== MSAL_CLIENT_ID_CONSUMER) all.push(...findMsalV1Tokens(cid));
+  for (const cid of findAllMsalClientIds('msal.token.keys.')) {
+    if (cid === MSAL_CLIENT_ID_CONSUMER) continue;
+    all.push(...findMsalV1Tokens(cid));
   }
 
   // Deduplicate by token — multiple lookups can surface the same secret
