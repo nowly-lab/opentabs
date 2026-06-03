@@ -51,7 +51,7 @@ export const requireContext = (): FiverrContext => {
 };
 
 export const normalizeFiverrUsername = (value: string, fieldName = 'username'): string => {
-  const username = value.trim().replace(/^@+/, '').replace(/^\/+/, '').replace(/^@+/, '');
+  const username = value.trim().replace(/^[@/]+/, '');
   if (!username) throw ToolError.validation(`${fieldName} is required.`);
   if (username.includes('/')) {
     throw ToolError.validation(`${fieldName} must be a single Fiverr username with no slashes.`);
