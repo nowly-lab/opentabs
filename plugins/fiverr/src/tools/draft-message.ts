@@ -1,6 +1,6 @@
 import { defineTool } from '@opentabs-dev/plugin-sdk';
 import { z } from 'zod';
-import { getUsername, requireContext } from '../fiverr-api.js';
+import { getUsername, normalizeFiverrUsername, requireContext } from '../fiverr-api.js';
 
 export const draftMessage = defineTool({
   name: 'draft_message',
@@ -25,7 +25,7 @@ export const draftMessage = defineTool({
   }),
   handle: async params => {
     requireContext();
-    const recipient = params.recipient_username.replace(/^@/, '').trim();
+    const recipient = normalizeFiverrUsername(params.recipient_username, 'recipient_username');
     const body = params.body.trim();
     return {
       from: getUsername(),

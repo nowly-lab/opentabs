@@ -22,7 +22,7 @@ export const gigSummarySchema = z.object({
   is_pro: z.boolean().describe('Whether the seller is a Fiverr Pro seller'),
   rating: z.number().describe('Average buyer review rating (0–5)'),
   ratings_count: z.number().describe('Number of buyer reviews'),
-  price: z.number().describe('Starting ("from") price in whole currency units (e.g., 40 means $40)'),
+  price: z.number().describe('Starting ("from") price in the smallest currency unit (e.g., cents; 4000 means $40.00)'),
   currency: z.string().describe('ISO currency code for the price (e.g., "USD")'),
   num_packages: z.number().describe('Number of packages offered'),
   image: z.string().describe('Primary gig image URL, empty if none'),

@@ -50,6 +50,15 @@ export const requireContext = (): FiverrContext => {
   return ctx;
 };
 
+export const normalizeFiverrUsername = (value: string, fieldName = 'username'): string => {
+  const username = value.trim().replace(/^@+/, '').replace(/^\/+/, '').replace(/^@+/, '');
+  if (!username) throw ToolError.validation(`${fieldName} is required.`);
+  if (username.includes('/')) {
+    throw ToolError.validation(`${fieldName} must be a single Fiverr username with no slashes.`);
+  }
+  return username;
+};
+
 // --- SSR data-island extraction ---
 // Fiverr pages (search, gig, seller profile) are server-rendered React apps. The
 // page data is embedded in a `<script id="perseus-initial-props" type="application/json">`
@@ -81,14 +90,14 @@ export const fetchPerseusProps = async (path: string): Promise<Record<string, un
 // adapter fetches (they are not behind the bot-detection layer that guards the
 // gig/seller JSON APIs).
 
-export const fetchInboxJson = async <T>(path: string): Promise<T> => {
+export const fetchInboxJson = async <T>(path: string): Promise<T | null> => {
   requireContext();
 
   const response = await fetchFromPage(path, {
     headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
   });
   if (!response.ok) throw httpStatusToToolError(response, `Failed to load ${path}`);
-  if (response.status === 204) return {} as T;
+  if (response.status === 204) return null;
   return (await response.json()) as T;
 };
 

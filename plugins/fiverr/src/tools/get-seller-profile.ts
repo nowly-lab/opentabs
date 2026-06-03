@@ -1,6 +1,6 @@
 import { defineTool, ToolError } from '@opentabs-dev/plugin-sdk';
 import { z } from 'zod';
-import { fetchPerseusProps } from '../fiverr-api.js';
+import { fetchPerseusProps, normalizeFiverrUsername } from '../fiverr-api.js';
 import { mapSellerProfile, type RawSellerProfile, sellerProfileSchema } from './schemas.js';
 
 export const getSellerProfile = defineTool({
@@ -18,11 +18,8 @@ export const getSellerProfile = defineTool({
   }),
   output: z.object({ seller: sellerProfileSchema }),
   handle: async params => {
-    const username = params.username.replace(/^\/+/, '').trim();
-    if (!username || username.includes('/')) {
-      throw ToolError.validation('username must be a single Fiverr username with no slashes.');
-    }
-    const props = (await fetchPerseusProps(`/${username}`)) as RawSellerProfile;
+    const username = normalizeFiverrUsername(params.username);
+    const props = (await fetchPerseusProps(`/${encodeURIComponent(username)}`)) as RawSellerProfile;
     if (!props.seller?.user?.name) {
       throw ToolError.notFound(`No seller profile found for "${username}".`);
     }

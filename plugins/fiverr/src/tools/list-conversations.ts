@@ -19,6 +19,7 @@ export const listConversations = defineTool({
   }),
   handle: async () => {
     const contacts = await fetchInboxJson<RawContact[]>('/inbox/contacts');
-    return { conversations: (contacts ?? []).map(mapConversationSummary) };
+    const contactList = Array.isArray(contacts) ? contacts : [];
+    return { conversations: contactList.map(mapConversationSummary) };
   },
 });

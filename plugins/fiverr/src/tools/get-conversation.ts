@@ -1,6 +1,6 @@
 import { defineTool, ToolError } from '@opentabs-dev/plugin-sdk';
 import { z } from 'zod';
-import { fetchInboxJson } from '../fiverr-api.js';
+import { fetchInboxJson, normalizeFiverrUsername } from '../fiverr-api.js';
 import { conversationSchema, mapConversation, type RawConversation } from './schemas.js';
 
 export const getConversation = defineTool({
@@ -19,10 +19,7 @@ export const getConversation = defineTool({
   }),
   output: z.object({ conversation: conversationSchema }),
   handle: async params => {
-    const username = params.username.replace(/^\/+/, '').trim();
-    if (!username || username.includes('/')) {
-      throw ToolError.validation('username must be a single Fiverr username with no slashes.');
-    }
+    const username = normalizeFiverrUsername(params.username);
     const raw = await fetchInboxJson<RawConversation>(`/inbox/contacts/${encodeURIComponent(username)}`);
     if (!raw?.conversationId) {
       throw ToolError.notFound(`No conversation found with "${username}".`);

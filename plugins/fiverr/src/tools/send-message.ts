@@ -1,6 +1,6 @@
 import { defineTool, ToolError } from '@opentabs-dev/plugin-sdk';
 import { z } from 'zod';
-import { sendInboxMessage } from '../fiverr-api.js';
+import { normalizeFiverrUsername, sendInboxMessage } from '../fiverr-api.js';
 
 export const sendMessage = defineTool({
   name: 'send_message',
@@ -18,16 +18,15 @@ export const sendMessage = defineTool({
     body: z.string().min(1).describe('Message text to send'),
   }),
   output: z.object({
-    success: z.boolean().describe('Whether the message was sent'),
+    success: z.boolean().describe('True when Fiverr returned an ID for the created message'),
     message_id: z.string().describe('ID of the created message, empty if the API did not return one'),
   }),
   handle: async params => {
-    const recipient = params.recipient_username.replace(/^@/, '').trim();
+    const recipient = normalizeFiverrUsername(params.recipient_username, 'recipient_username');
     const body = params.body.trim();
-    if (!recipient) throw ToolError.validation('recipient_username is required.');
     if (!body) throw ToolError.validation('body is required.');
 
     const result = await sendInboxMessage(recipient, body);
-    return { success: true, message_id: result.messageId ?? '' };
+    return { success: result.messageId.length > 0, message_id: result.messageId };
   },
 });
