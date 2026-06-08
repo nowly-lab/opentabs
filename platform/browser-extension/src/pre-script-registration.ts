@@ -59,7 +59,23 @@ const upsertPreScript = async (meta: PluginMeta): Promise<void> => {
         runAt: 'document_start',
         world: 'MAIN',
         persistAcrossSessions: true,
-        allFrames: false,
+        // Inject into every matching same-origin frame, not just the top
+        // window. Auth frameworks such as SharePoint's WAC/Owl mint MSAL
+        // silent-renewal tokens inside same-origin sub-frames; a pre-script
+        // that runs only in the top window never sees those requests, because
+        // each frame has its own `window.fetch`/`XMLHttpRequest` to intercept.
+        //
+        // Per-frame injection is safe because each frame is a separate realm:
+        // the script runs independently in each, top-frame behavior is
+        // unchanged, and every frame's `globalThis.__openTabs` store is its
+        // own — there is no shared in-page state to double-write. A pre-script
+        // that wants a captured value to reach the top-frame adapter bridges
+        // it through a same-origin channel (e.g. `localStorage`), which all
+        // frames share; the per-realm `__openTabs` namespace does not cross
+        // frames. Cross-origin frames (e.g. a WOPI document canvas) are never
+        // injected — Chrome only matches frames whose URL satisfies
+        // `meta.urlPatterns`.
+        allFrames: true,
       },
     ]);
   } catch (err) {
