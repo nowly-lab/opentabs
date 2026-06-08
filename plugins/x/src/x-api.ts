@@ -74,15 +74,45 @@ let probeCounter = 0;
 /** Cached signing function from X's internal module. */
 let cachedSignFn: ((host: string, path: string, method: string) => Promise<string>) | null = null;
 
+/**
+ * Locate the webpack module that exports the transaction-id signing function `jJ`.
+ * The module ID is not stable across X web bundle releases, so we scan every module
+ * in the webpack chunk registry for the distinctive `jJ:()=>` export marker.
+ */
+const findSigningModuleId = (chunks: Array<[unknown, Record<string, (...args: never) => unknown>]>): number | null => {
+  for (const chunk of chunks) {
+    const modules = chunk[1];
+    if (typeof modules !== 'object') continue;
+    for (const [id, mod] of Object.entries(modules)) {
+      try {
+        if (/jJ:\s*\(\)\s*=>/.test(mod.toString())) {
+          const numericId = Number(id);
+          if (Number.isFinite(numericId)) return numericId;
+        }
+      } catch {
+        /* skip unparseable modules */
+      }
+    }
+  }
+  return null;
+};
+
 /** Get the transaction ID signing function from X's webpack module system. */
 const getSignFn = (): typeof cachedSignFn => {
   if (cachedSignFn) return cachedSignFn;
   try {
-    let requireFn: ((id: number) => Record<string, unknown>) | null = null;
     const chunks = (globalThis as Record<string, unknown>).webpackChunk_twitter_responsive_web as
-      | Array<unknown>
+      | Array<[unknown, Record<string, (...args: never) => unknown>]>
       | undefined;
     if (!chunks || !Array.isArray(chunks)) return null;
+
+    const moduleId = findSigningModuleId(chunks);
+    if (moduleId === null) {
+      log.debug('Could not locate X transaction ID signing module in webpack chunks');
+      return null;
+    }
+
+    let requireFn: ((id: number) => Record<string, unknown>) | null = null;
     (chunks as { push: (entry: unknown) => void }).push([
       [`__ot_sign_${++probeCounter}`],
       {},
@@ -91,7 +121,7 @@ const getSignFn = (): typeof cachedSignFn => {
       },
     ]);
     if (!requireFn) return null;
-    const mod = (requireFn as (id: number) => Record<string, unknown>)(938838);
+    const mod = (requireFn as (id: number) => Record<string, unknown>)(moduleId);
     const jJ = mod.jJ as typeof cachedSignFn;
     if (typeof jJ === 'function') {
       cachedSignFn = jJ;

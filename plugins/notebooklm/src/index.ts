@@ -17,6 +17,7 @@ import { listChatSessions } from './tools/list-chat-sessions.js';
 import { getNotebookGuide } from './tools/get-notebook-guide.js';
 import { addSourceUrl } from './tools/add-source-url.js';
 import { addSourceText } from './tools/add-source-text.js';
+import { listSources } from './tools/list-sources.js';
 import { deleteSources } from './tools/delete-sources.js';
 import { getCurrentUser } from './tools/get-current-user.js';
 
@@ -44,6 +45,7 @@ class NotebookLMPlugin extends OpenTabsPlugin {
     getNotebookGuide,
     addSourceUrl,
     addSourceText,
+    listSources,
     deleteSources,
     getCurrentUser,
   ];

@@ -64,34 +64,51 @@ describe('writeExecFile', () => {
     await ensureAdaptersDir(state);
   });
 
-  test('wraps user code inline in an IIFE without eval', async () => {
+  test('uses expression path for syntactically valid expression code', async () => {
     const state = createState();
-    const filename = await writeExecFile(state, 'test-1', 'return 42');
+    const filename = await writeExecFile(state, 'expr-test', '42');
 
-    expect(filename).toBe(`${EXEC_FILE_PREFIX}test-1.js`);
+    expect(filename).toBe(`${EXEC_FILE_PREFIX}expr-test.js`);
 
     const content = await readFile(join(getAdaptersDir(), filename), 'utf-8');
-    // Starts with IIFE wrapper
+    // Outer IIFE structure is intact
     expect(content.startsWith('(function() {')).toBe(true);
     expect(content.endsWith('})();')).toBe(true);
-    // User code is placed inline in an inner async function (no eval/new Function)
-    expect(content).toContain('(async function() {');
-    expect(content).toContain('return 42');
-    expect(content).not.toContain('new Function');
+    // Expression path uses arrow async IIFE — no eval or new Function in browser
+    expect(content).toContain('(async () => (');
+    expect(content).not.toContain('eval(');
+    expect(content).not.toContain('new Function(');
     // Contains the namespaced result capture mechanism
-    expect(content).toContain('__execResult_test-1');
+    expect(content).toContain('__execResult_expr-test');
     expect(content).toContain('__openTabs');
   });
 
-  test('places user code inline preserving its content verbatim', async () => {
+  test('uses statement path for code with return statement', async () => {
     const state = createState();
-    const code = 'return "hello\\nworld"';
-    const filename = await writeExecFile(state, 'escape-test', code);
+    const filename = await writeExecFile(state, 'stmt-test', 'return 42');
 
     const content = await readFile(join(getAdaptersDir(), filename), 'utf-8');
-    // User code appears verbatim (not JSON-escaped) inside the inner function
+    // Statement path uses async function body — no eval or new Function in browser
+    expect(content).toContain('(async function() {');
+    expect(content).not.toContain('eval(');
+    expect(content).not.toContain('new Function(');
+    // Contains the namespaced result capture mechanism
+    expect(content).toContain('__execResult_stmt-test');
+  });
+
+  test('inlines user code directly in the wrapper (not JSON-encoded)', async () => {
+    const state = createState();
+    const code = 'return "hello\\nworld"';
+    const filename = await writeExecFile(state, 'inline-test', code);
+
+    const content = await readFile(join(getAdaptersDir(), filename), 'utf-8');
+    // User code is inlined directly — not stored as a JSON string in __src
+    expect(content).not.toContain('var __src =');
     expect(content).toContain(code);
-    expect(content).not.toContain('new Function');
+    // Statement path (code has return), no eval or new Function
+    expect(content).toContain('(async function() {');
+    expect(content).not.toContain('eval(');
+    expect(content).not.toContain('new Function(');
   });
 
   test('handles async code with promise support in wrapper', async () => {
@@ -103,24 +120,68 @@ describe('writeExecFile', () => {
     // asyncKey variable is declared (for cleanup reference) but not set on __ot
     expect(content).toContain('__execAsync_async-test');
     expect(content).not.toContain('__ot[__asyncKey] = true');
-    // Uses .then(onFulfilled, onRejected) for direct rejection handling
+    // Statement path — uses async function IIFE with .then() for result capture
     expect(content).toContain('})().then(');
     expect(content).toContain('function(v) { __ot[__resultKey] = { value: v }; }');
     expect(content).toContain('function(e) { __ot[__resultKey] = { error:');
   });
 
-  test('user code is placed inline in the inner function body', async () => {
+  test('outer IIFE wrapper is intact for any user code shape', async () => {
     const state = createState();
+    // Code whose characters could, if mishandled, break the surrounding wrapper
     const code = '});alert(1);//';
-    const filename = await writeExecFile(state, 'inline-test', code);
+    const filename = await writeExecFile(state, 'wrapper-test', code);
 
     const content = await readFile(join(getAdaptersDir(), filename), 'utf-8');
-    // User code is inlined verbatim — no eval-like wrapping
-    expect(content).toContain(code);
-    expect(content).not.toContain('new Function');
-    // The outer IIFE wrapper is intact
+    // The outer IIFE always starts and ends with the correct structure
     expect(content.startsWith('(function() {')).toBe(true);
     expect(content.endsWith('})();')).toBe(true);
+    // The user code is present in the output
+    expect(content).toContain(code);
+    // No eval or new Function in generated browser code
+    expect(content).not.toContain('eval(');
+    expect(content).not.toContain('new Function(');
+  });
+
+  test('__startedKey sentinel is set synchronously before any try block', async () => {
+    const state = createState();
+    const filename = await writeExecFile(state, 'started-test', '42');
+
+    const content = await readFile(join(getAdaptersDir(), filename), 'utf-8');
+    // __startedKey must appear before the first 'try {' so the extension poller
+    // can distinguish "IIFE hasn't run yet" from "result pending"
+    const startedPos = content.indexOf('__ot[__startedKey] = true;');
+    const tryPos = content.indexOf('try {');
+    expect(startedPos).toBeGreaterThanOrEqual(0);
+    expect(tryPos).toBeGreaterThanOrEqual(0);
+    expect(startedPos).toBeLessThan(tryPos);
+  });
+
+  test('all three namespaced keys are emitted using the execId', async () => {
+    const state = createState();
+    const execId = 'uuid-abc-123';
+    const filename = await writeExecFile(state, execId, 'document.title');
+
+    const content = await readFile(join(getAdaptersDir(), filename), 'utf-8');
+    expect(content).toContain(`__execResult_${execId}`);
+    expect(content).toContain(`__execAsync_${execId}`);
+    expect(content).toContain(`__execStarted_${execId}`);
+  });
+
+  test('result is stored as { value } on success path', async () => {
+    const state = createState();
+    const filename = await writeExecFile(state, 'value-shape-test', '42');
+
+    const content = await readFile(join(getAdaptersDir(), filename), 'utf-8');
+    expect(content).toContain('__ot[__resultKey] = { value: v }');
+  });
+
+  test('error is stored as { error: message } on rejection path', async () => {
+    const state = createState();
+    const filename = await writeExecFile(state, 'error-shape-test', 'throw new Error("oops")');
+
+    const content = await readFile(join(getAdaptersDir(), filename), 'utf-8');
+    expect(content).toContain('__ot[__resultKey] = { error: e instanceof Error ? e.message : String(e) }');
   });
 
   test('creates the adapters directory via ensureAdaptersDir if needed', async () => {

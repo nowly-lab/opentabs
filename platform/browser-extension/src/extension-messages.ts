@@ -270,5 +270,7 @@ export interface PluginMeta {
   iconInactiveSvg?: string;
   iconDarkSvg?: string;
   iconDarkInactiveSvg?: string;
+  preScriptFile?: string;
+  preScriptHash?: string;
   tools: WireToolDef[];
 }

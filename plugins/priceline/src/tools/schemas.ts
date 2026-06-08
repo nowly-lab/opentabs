@@ -282,3 +282,144 @@ export const mapMerchandisingBadge = (e: RawMerchandisingEntity) => ({
   is_top_rated: e.topBadges?.isTopRated ?? false,
   is_top_booked: e.topBadges?.isTopBooked ?? false,
 });
+
+// --- Airport / Flight Location ---
+
+export const airportSchema = z.object({
+  id: z.string().describe('IATA code for an airport (e.g., JFK, LAX) or city code for a metro area (e.g., NYC)'),
+  type: z
+    .string()
+    .describe('Entry type — AIRPORT for a specific airport, GDS_CITY for a multi-airport metropolitan area'),
+  display_name: z
+    .string()
+    .describe('Full display name (e.g., "New York City, NY - John F Kennedy Intl Airport (JFK)")'),
+  city_name: z.string().describe('City name'),
+  state_code: z.string().describe('State or province code (US only)'),
+  country_code: z.string().describe('ISO country code (e.g., US, GB)'),
+  latitude: z.number().describe('Airport latitude in decimal degrees; 0 for multi-airport metro entries'),
+  longitude: z.number().describe('Airport longitude in decimal degrees; 0 for multi-airport metro entries'),
+  timezone: z.string().describe('IANA timezone name (e.g., America/New_York)'),
+});
+
+export interface RawAirport {
+  id?: string;
+  subType?: string;
+  displayName?: string;
+  cityName?: string;
+  stateCode?: string;
+  countryCode?: string;
+  lat?: number;
+  lon?: number;
+  timeZoneName?: string;
+}
+
+export const mapAirport = (a: RawAirport) => ({
+  id: a.id ?? '',
+  type: a.subType ?? '',
+  display_name: a.displayName ?? '',
+  city_name: a.cityName ?? '',
+  state_code: a.stateCode ?? '',
+  country_code: a.countryCode ?? '',
+  latitude: a.lat ?? 0,
+  longitude: a.lon ?? 0,
+  timezone: a.timeZoneName ?? '',
+});
+
+// --- Flight Price Calendar (airPriceGuideCalendar) ---
+
+export const flightFareRecordSchema = z.object({
+  dates: z
+    .array(z.string())
+    .describe(
+      'Travel date(s) in YYYY-MM-DD format. One entry for one-way searches; two entries (depart, return) for round-trip.',
+    ),
+  min_price: z.number().describe('Minimum fare per passenger in the response currency'),
+  currency: z.string().describe('Currency code (e.g., USD)'),
+  is_private_fare: z.boolean().describe('Whether the fare is a members-only private rate'),
+  stops_by_slice: z
+    .array(
+      z.object({
+        slice_id: z.number().int().describe('Slice number (1 for outbound, 2 for return)'),
+        stops: z.number().int().describe('Number of stops for this slice (0 = non-stop)'),
+      }),
+    )
+    .describe('Stop counts for each flight slice'),
+  takeoff_times: z.array(z.string()).describe('Departure times per slice in HH:MM (24h)'),
+  landing_times: z.array(z.string()).describe('Arrival times per slice in HH:MM (24h)'),
+});
+
+interface RawFlightMinFareCommon {
+  takeOffTimes?: string[];
+  landingTimes?: string[];
+}
+
+interface RawFlightStop {
+  sliceId?: number;
+  stops?: number;
+}
+
+export interface RawFlightMinimumFare {
+  isPrivateFare?: boolean;
+  currency?: string;
+  amtPerPax?: number;
+  commonAttributes?: RawFlightMinFareCommon;
+  listOfStops?: RawFlightStop[];
+}
+
+export interface RawFlightFareRecord {
+  dates?: string[];
+  minimumFare?: RawFlightMinimumFare;
+}
+
+export const mapFlightFareRecord = (r: RawFlightFareRecord) => ({
+  dates: r.dates ?? [],
+  min_price: r.minimumFare?.amtPerPax ?? 0,
+  currency: r.minimumFare?.currency ?? '',
+  is_private_fare: r.minimumFare?.isPrivateFare ?? false,
+  stops_by_slice: (r.minimumFare?.listOfStops ?? []).map(s => ({
+    slice_id: s.sliceId ?? 0,
+    stops: s.stops ?? 0,
+  })),
+  takeoff_times: r.minimumFare?.commonAttributes?.takeOffTimes ?? [],
+  landing_times: r.minimumFare?.commonAttributes?.landingTimes ?? [],
+});
+
+// --- Flight Price Watch (airPriceWatchGetListResponse) ---
+
+export const flightPriceWatchSchema = z.object({
+  origin_code: z.string().describe('Origin airport or city code'),
+  destination_code: z.string().describe('Destination airport or city code'),
+  depart_date: z.string().describe('Outbound date in YYYY-MM-DD format'),
+  return_date: z.string().describe('Return date in YYYY-MM-DD format, empty for one-way watches'),
+  cabin_class: z.string().describe('Cabin class (ECO, BUS, FIRST)'),
+  current_price: z.number().describe('Most recently observed minimum fare'),
+  target_price: z.number().describe('User-set target fare for alerts'),
+  is_active: z.boolean().describe('Whether the watch is currently active'),
+  created_at: z.string().describe('When the watch was created (ISO 8601)'),
+});
+
+export interface RawFlightPriceWatch {
+  originCityCode?: string;
+  originCityId?: string;
+  destCityCode?: string;
+  destCityId?: string;
+  departDate?: string;
+  returnDate?: string;
+  cabinClass?: string;
+  currentPrice?: number;
+  targetPrice?: number;
+  active?: boolean;
+  createdDate?: string;
+}
+
+export const mapFlightPriceWatch = (w: RawFlightPriceWatch) => ({
+  origin_code: w.originCityCode ?? '',
+  destination_code: w.destCityCode ?? '',
+  depart_date: w.departDate ?? '',
+  return_date: w.returnDate ?? '',
+  cabin_class: w.cabinClass ?? '',
+  current_price: w.currentPrice ?? 0,
+  target_price: w.targetPrice ?? 0,
+  is_active: w.active ?? false,
+  created_at: w.createdDate ?? '',
+});

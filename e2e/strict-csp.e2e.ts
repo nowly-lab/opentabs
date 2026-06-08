@@ -475,8 +475,9 @@ fixtureTest.describe('Strict CSP — connect-src blocks fetch', () => {
 
 /**
  * Open a tab to a URL via browser_open_tab, wait for page load, return tabId.
- * Uses browser_execute_script to poll readyState — works because the CSP fix
- * ensures file-based injection has no eval-like constructs inside the wrapper.
+ * Uses browser_execute_script to poll readyState — works because the wrapper
+ * uses no eval or new Function in the generated browser code; expression vs
+ * statement detection happens server-side so strict CSP pages are unaffected.
  */
 const openStrictCspTab = async (
   mcpClient: McpClient,

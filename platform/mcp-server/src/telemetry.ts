@@ -13,9 +13,13 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { getConfigPath, getTelemetryIdPath } from '@opentabs-dev/shared';
+import type { RegisteredPlugin } from './state.js';
 
 const POSTHOG_API_KEY = 'phc_FeCHxj0woIHEoNjWPArv7gXr949jiCJUcF3JQr6gx9f';
 const POSTHOG_HOST = 'https://us.i.posthog.com';
+
+const FIRST_PARTY_NPM_SCOPE = '@opentabs-dev/opentabs-plugin-';
+const EXCLUDED_PLUGIN_NAMES: ReadonlySet<string> = new Set(['onlyfans', 'tinder']);
 
 // Module-level state — initialized once per process via initTelemetry().
 let client:
@@ -193,6 +197,48 @@ const classifyLoadFailures = (
 };
 
 /**
+ * Return `true` when a plugin is first-party, installed from npm, and not on
+ * the sensitive-category exclusion list. Used to gate `plugin_tool_used`
+ * events so we only collect usage data for plugins we maintain and can act on.
+ */
+const isTrackablePlugin = (plugin: RegisteredPlugin): boolean => {
+  if (plugin.source !== 'npm') return false;
+  if (!plugin.npmPackageName?.startsWith(FIRST_PARTY_NPM_SCOPE)) return false;
+  if (EXCLUDED_PLUGIN_NAMES.has(plugin.name)) return false;
+  return true;
+};
+
+/** Bucket tool-call latency into coarse ranges suitable for anonymous analytics. */
+const computeDurationBucket = (ms: number): '<100ms' | '<1s' | '<5s' | '>=5s' => {
+  if (ms < 100) return '<100ms';
+  if (ms < 1000) return '<1s';
+  if (ms < 5000) return '<5s';
+  return '>=5s';
+};
+
+/**
+ * Emit a `plugin_tool_used` event for a first-party plugin tool invocation.
+ * Silently drops the event for local/third-party/excluded plugins.
+ */
+const trackPluginToolUsage = (
+  plugin: RegisteredPlugin,
+  toolName: string,
+  outcome: { success: boolean; errorCategory?: string; durationMs: number },
+): void => {
+  if (!isTrackablePlugin(plugin)) return;
+  const errorCategory = outcome.success ? 'none' : (outcome.errorCategory ?? 'unknown');
+  trackEvent('plugin_tool_used', {
+    session_id: getSessionId(),
+    plugin_name: plugin.name,
+    plugin_version: plugin.version,
+    tool_name: toolName,
+    success: outcome.success,
+    error_category: errorCategory,
+    duration_bucket: computeDurationBucket(outcome.durationMs),
+  });
+};
+
+/**
  * Flush pending telemetry events. Call before process exit.
  * Has a 2-second timeout so it cannot prevent process exit.
  */
@@ -208,12 +254,15 @@ const shutdownTelemetry = async (): Promise<void> => {
 
 export {
   classifyLoadFailures,
+  computeDurationBucket,
   computeErrorRateBucket,
   getOrCreateAnonymousId,
   getSessionId,
   identifyPerson,
   initTelemetry,
   isTelemetryEnabled,
+  isTrackablePlugin,
   shutdownTelemetry,
   trackEvent,
+  trackPluginToolUsage,
 };

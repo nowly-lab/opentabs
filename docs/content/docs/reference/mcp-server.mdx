@@ -1,7 +1,7 @@
 ---
 title: MCP Server
 description: HTTP endpoints, WebSocket protocol, authentication, MCP capabilities, and client configuration for the OpenTabs server.
-lastUpdated: 2026-04-15
+lastUpdated: 2026-04-24
 ---
 
 Everything here describes the server that `opentabs start` runs on your machine. It's a single localhost HTTP process — port 9515 by default. AI clients connect to `/mcp`, the Chrome extension connects to `/ws`. No cloud, no relay, no accounts. Just a process running locally, bridging your AI agent and your browser.
@@ -243,6 +243,79 @@ The server exposes these MCP capabilities:
 - **Tools** — plugin tools (prefixed as `<plugin>_<tool>`) and built-in browser tools (`browser_*`, `extension_*`)
 - **Logging** — plugin log entries forwarded as `notifications/message` to connected clients
 - **Progress** — tool progress notifications forwarded as `notifications/progress` (requires `progressToken` in request `_meta`)
+
+### Auto-injected tool parameters
+
+The platform modifies every plugin tool's input schema at registration time by injecting additional parameters. Plugin authors never declare these — they are transparent to plugin code and stripped from the input before the tool handler runs. The same injected schemas apply uniformly to `/mcp`, `/mcp/gateway` (via `opentabs_call`), and the REST `/tools/:name/call` endpoint.
+
+<Table>
+  <Table.Header>
+    <Table.Row>
+      <Table.Head>Parameter</Table.Head>
+      <Table.Head>Type</Table.Head>
+      <Table.Head>Required?</Table.Head>
+      <Table.Head>Injected when</Table.Head>
+    </Table.Row>
+  </Table.Header>
+  <Table.Body>
+    <Table.Row>
+      <Table.Cell className="font-medium">`tabId`</Table.Cell>
+      <Table.Cell>integer (≥ 1)</Table.Cell>
+      <Table.Cell>No</Table.Cell>
+      <Table.Cell>Always — present on every plugin tool. When omitted, the platform auto-selects the best matching tab.</Table.Cell>
+    </Table.Row>
+    <Table.Row>
+      <Table.Cell className="font-medium">`instance`</Table.Cell>
+      <Table.Cell>string enum</Table.Cell>
+      <Table.Cell>Yes (when present)</Table.Cell>
+      <Table.Cell>Only when a plugin has 2 or more instances configured. Omitting it causes the call to fail schema validation.</Table.Cell>
+    </Table.Row>
+  </Table.Body>
+</Table>
+
+#### tabId
+
+Every plugin tool accepts an optional `tabId` integer. When supplied, the platform dispatches the call to that exact browser tab. When omitted, the platform picks the best available tab automatically.
+
+Use [`plugin_list_tabs`](/docs/reference/browser-tools#site-analysis) to discover which tabs are open and ready for a plugin, along with their IDs.
+
+#### instance
+
+When a plugin has **two or more instances** configured (via a `url`-type field in its `configSchema` whose user value is a `Record<string, string>` map of instance names to URLs), the platform injects `instance` as a **required** string enum. The enum values are the user-chosen instance names from `config.json`.
+
+**Example:** a user configures a Jira plugin with:
+
+```json
+"settings": {
+  "jira": {
+    "instanceUrl": {
+      "work": "https://acme.atlassian.net",
+      "personal": "https://me.atlassian.net"
+    }
+  }
+}
+```
+
+Every Jira tool's schema will include `"instance": { "type": "string", "enum": ["work", "personal"] }` in its `required` array. Calling the tool without `instance` returns a validation error.
+
+If a plugin has zero or one instance configured, `instance` is not present on the tool's schema.
+
+See [configuration → settings](/docs/reference/configuration#settings) for how to configure url-type settings with multiple instance entries.
+
+#### Example call with both parameters
+
+```json
+{
+  "name": "jira_list_issues",
+  "arguments": {
+    "instance": "work",
+    "tabId": 42,
+    "project": "PLAT"
+  }
+}
+```
+
+`instance` selects which site to target; `tabId` targets a specific browser tab open to that site. Use [`plugin_list_tabs`](/docs/reference/browser-tools#site-analysis) to retrieve both valid `tabId` values and the `instance` label associated with each tab.
 
 ---
 

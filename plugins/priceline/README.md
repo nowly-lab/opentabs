@@ -19,7 +19,7 @@ npm install -g @opentabs-dev/opentabs-plugin-priceline
 1. Open [priceline.com](https://www.priceline.com) in Chrome and log in
 2. Open the OpenTabs side panel — the Priceline plugin should appear as **ready**
 
-## Tools (13)
+## Tools (18)
 
 ### Search (3)
 
@@ -39,6 +39,16 @@ npm install -g @opentabs-dev/opentabs-plugin-priceline
 | `get_merchandising_badges` | Get top-rated/top-booked badges for hotels | Read |
 | `get_price_guidance` | Get hotel price trends for a city | Read |
 | `navigate_to_hotel` | Open a hotel detail page | Write |
+
+### Flights (5)
+
+| Tool | Description | Type |
+|---|---|---|
+| `search_airports` | Find airport and city codes by keyword | Read |
+| `get_flight_price_calendar` | Flight fare forecast for a date range | Read |
+| `find_cheapest_flight_date` | Find the cheapest flight date in a window | Read |
+| `list_flight_price_watches` | List user's flight price alerts | Read |
+| `navigate_to_flight_search` | Open Priceline flight search for a route | Write |
 
 ### Account (4)
 

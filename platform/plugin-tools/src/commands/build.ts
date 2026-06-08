@@ -24,6 +24,7 @@ import {
   DEFAULT_PORT,
   getConfigDir,
   getConfigPath,
+  PRE_SCRIPT_FILENAME,
   parsePluginPackageJson,
   pluginNameFromPackage,
   TOOLS_FILENAME,
@@ -623,6 +624,8 @@ interface PluginManifestOutput {
   iconInactiveSvg?: string;
   iconDarkSvg?: string;
   iconDarkInactiveSvg?: string;
+  preScriptFile?: string;
+  preScriptHash?: string;
   tools: ManifestTool[];
 }
 
@@ -687,13 +690,19 @@ const resolveSdkVersion = async (projectDir: string): Promise<string> => {
 };
 
 /** Generate the full manifest (tools) for dist/tools.json */
-const generateManifest = (plugin: OpenTabsPlugin, sdkVersion: string, icons?: IconResult): PluginManifestOutput => ({
+const generateManifest = (
+  plugin: OpenTabsPlugin,
+  sdkVersion: string,
+  icons?: IconResult,
+  preScript?: { file: string; hash: string },
+): PluginManifestOutput => ({
   sdkVersion,
   ...(plugin.configSchema && Object.keys(plugin.configSchema).length > 0 ? { configSchema: plugin.configSchema } : {}),
   ...(icons?.iconSvg ? { iconSvg: icons.iconSvg } : {}),
   ...(icons?.iconInactiveSvg ? { iconInactiveSvg: icons.iconInactiveSvg } : {}),
   ...(icons?.iconDarkSvg ? { iconDarkSvg: icons.iconDarkSvg } : {}),
   ...(icons?.iconDarkInactiveSvg ? { iconDarkInactiveSvg: icons.iconDarkInactiveSvg } : {}),
+  ...(preScript ? { preScriptFile: preScript.file, preScriptHash: preScript.hash } : {}),
   tools: generateToolsManifest(plugin),
 });
 
@@ -741,6 +750,11 @@ interface OpenTabsRuntime {
   _readinessNonce?: string;
   _notifyReadinessChanged?: () => void;
   _navigationInterceptor?: NavigationInterceptor;
+  /** The currently-executing plugin adapter's name.
+   *  Set by each tool-handler wrap before calling user code so
+   *  getPreScriptValue() reads the correct per-plugin namespace. */
+  _pluginName?: string;
+  preScript?: Record<string, Record<string, unknown>>;
 }
 declare global {
   var __openTabs: OpenTabsRuntime | undefined;
@@ -855,6 +869,10 @@ for (const tool of plugin.tools) {
   const origHandle = tool.handle;
   tool.handle = async function(...handleArgs: [unknown, ...unknown[]]) {
     const startTime = performance.now();
+    // Pin the current plugin name so getPreScriptValue() in the SDK reads
+    // this plugin's bucket, not another adapter's.
+    const runtime = globalThis.__openTabs!;
+    runtime._pluginName = ${name};
     if (hasLifecycleHooks && typeof plugin.onToolInvocationStart === 'function') {
       try { plugin.onToolInvocationStart(tool.name); } catch (e) { console.warn('[OpenTabs] onToolInvocationStart failed:', e); }
     }
@@ -998,6 +1016,110 @@ const formatTimestamp = (): string => {
   const m = String(now.getMinutes()).padStart(2, '0');
   const s = String(now.getSeconds()).padStart(2, '0');
   return `${h}:${m}:${s}`;
+};
+
+/**
+ * Bundle the plugin's pre-script into an IIFE at dist/pre-script.iife.js.
+ * The pre-script runs at document_start in MAIN world via
+ * chrome.scripting.registerContentScripts, strictly before any page script.
+ *
+ * The wrapper sets globalThis.__openTabs._preScriptRunner before dynamically
+ * importing the user module. definePreScript() inside the user module calls
+ * _preScriptRunner synchronously so the callback runs at document_start.
+ * _preScriptRunner is cleaned up in the finally block after the import resolves.
+ *
+ * Returns the SHA-256 hex hash of the generated IIFE content (without the
+ * sourceMappingURL comment) so the manifest can carry it for change detection.
+ */
+const bundlePreScript = async (preScriptEntry: string, outDir: string, pluginName: string): Promise<string> => {
+  const setupPath = join(outDir, `_pre_script_setup_${crypto.randomUUID()}.ts`);
+  const name = JSON.stringify(pluginName);
+  const logPrefix = JSON.stringify(`[opentabs:${pluginName}:pre-script]`);
+
+  // Setup code is injected before the user module via esbuild's inject option.
+  // This runs synchronously at document_start — no async imports needed.
+  // _preScriptRunner self-destructs after being called once, so definePreScript()
+  // can only capture values on the first invocation.
+  const setupCode = `declare global {
+  var __openTabs: {
+    _preScriptRunner?: (fn: (ctx: {
+      set(key: string, value: unknown): void;
+      log: {
+        debug(...args: unknown[]): void;
+        info(...args: unknown[]): void;
+        warn(...args: unknown[]): void;
+        error(...args: unknown[]): void;
+      };
+    }) => void) => void;
+    preScript?: Record<string, Record<string, unknown>>;
+  } | undefined;
+}
+
+if (!globalThis.__openTabs) {
+  (globalThis as Record<string, unknown>).__openTabs = {};
+}
+const _ot = globalThis.__openTabs!;
+if (!_ot.preScript) {
+  _ot.preScript = {};
+}
+
+// Reset this plugin's pre-script bucket on every load. Each navigation gets
+// a clean slate so stale values from the previous page don't leak.
+_ot.preScript[${name}] = {};
+
+// Plugin-scoped logger. Pre-script logs go directly to console — the
+// extension's ISOLATED-world log relay hasn't loaded yet at document_start.
+const _logPrefix = ${logPrefix};
+const _log = {
+  debug: (...args: unknown[]) => { console.debug(_logPrefix, ...args); },
+  info:  (...args: unknown[]) => { console.info(_logPrefix, ...args); },
+  warn:  (...args: unknown[]) => { console.warn(_logPrefix, ...args); },
+  error: (...args: unknown[]) => { console.error(_logPrefix, ...args); },
+};
+
+// Install _preScriptRunner so definePreScript() in the user module can invoke
+// the callback synchronously. Self-destructs after first call so it cannot
+// be called again after the pre-script has loaded.
+_ot._preScriptRunner = (fn) => {
+  delete _ot._preScriptRunner;
+  const ctx = {
+    set(key: string, value: unknown) {
+      _ot.preScript![${name}]![key] = value;
+    },
+    log: _log,
+  };
+  try {
+    fn(ctx as Parameters<typeof fn>[0]);
+  } catch (e) {
+    console.error(_logPrefix, 'pre-script threw:', e);
+  }
+};
+`;
+
+  await writeFile(setupPath, setupCode, 'utf-8');
+
+  try {
+    await esbuild({
+      // The user module is the entry point. The setup code is injected before it
+      // via esbuild's inject option, which adds an implicit import of setupPath
+      // at the top of every bundled file — setup runs first, then the user module.
+      entryPoints: [preScriptEntry],
+      inject: [setupPath],
+      outfile: join(outDir, PRE_SCRIPT_FILENAME),
+      format: 'iife',
+      platform: 'browser',
+      bundle: true,
+      minify: false,
+      sourcemap: 'linked',
+      plugins: [stripNodeBuiltins],
+    });
+  } finally {
+    await unlink(setupPath).catch(() => {});
+  }
+
+  const iifeRaw = await readFile(join(outDir, PRE_SCRIPT_FILENAME), 'utf-8');
+  const iifeContent = iifeRaw.replace(/\n\/\/# sourceMappingURL=[^\n]+\n?$/, '');
+  return createHash('sha256').update(iifeContent).digest('hex');
 };
 
 /**
@@ -1193,9 +1315,29 @@ const runBuild = async (projectDir: string): Promise<void> => {
   console.log(pc.dim('Resolving SDK version...'));
   const sdkVersion = await resolveSdkVersion(projectDir);
 
+  // Step 5b: Bundle pre-script IIFE (when plugin declares opentabs.preScript)
+  let preScriptInfo: { file: string; hash: string } | undefined;
+  if (pkgJson.opentabs.preScript) {
+    const preScriptSourcePath = resolve(projectDir, pkgJson.opentabs.preScript);
+    const sourceExists = await access(preScriptSourcePath).then(
+      () => true,
+      () => false,
+    );
+    if (!sourceExists) {
+      throw new Error(
+        `Declared preScript source not found: ${preScriptSourcePath}. Check the "opentabs.preScript" field in package.json.`,
+      );
+    }
+    console.log(pc.dim('Bundling pre-script IIFE...'));
+    const preScriptHash = await bundlePreScript(preScriptSourcePath, distDir, derivedName);
+    preScriptInfo = { file: PRE_SCRIPT_FILENAME, hash: preScriptHash };
+    const preScriptFileSize = (await stat(join(distDir, PRE_SCRIPT_FILENAME))).size;
+    console.log(`  Written: ${pc.bold(`dist/${PRE_SCRIPT_FILENAME}`)} (${formatBytes(preScriptFileSize)})`);
+  }
+
   // Step 6: Generate dist/tools.json (tool schemas + icons)
   console.log(pc.dim(`Generating ${TOOLS_FILENAME}...`));
-  const manifest = generateManifest(plugin, sdkVersion, icons);
+  const manifest = generateManifest(plugin, sdkVersion, icons, preScriptInfo);
   const toolsJsonPath = join(distDir, TOOLS_FILENAME);
   await writeFile(toolsJsonPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
   const toolCount = manifest.tools.length;
@@ -1288,7 +1430,14 @@ const handleBuild = async (options: { watch?: boolean }): Promise<void> => {
     watcher = watch(distDir, { recursive: true }, (_event, filename) => {
       // Only react to .js file changes (tsc output), skip adapter.iife.js
       // and temporary wrapper files to avoid rebuild loops
-      if (!filename?.endsWith('.js') || filename === ADAPTER_FILENAME || filename.startsWith('_adapter_entry_')) return;
+      if (
+        !filename?.endsWith('.js') ||
+        filename === ADAPTER_FILENAME ||
+        filename === PRE_SCRIPT_FILENAME ||
+        filename.startsWith('_adapter_entry_') ||
+        filename.startsWith('_pre_script_setup_')
+      )
+        return;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => void rebuild(), DEBOUNCE_MS);
     });

@@ -5,8 +5,9 @@ import {
   CreditCardIcon,
   EyeIcon,
   FileTextIcon,
-  FigmaIcon,
+  FrameIcon,
   GitBranchIcon,
+  KanbanIcon,
   LayoutDashboardIcon,
   LockIcon,
   MessageSquareIcon,
@@ -19,14 +20,13 @@ import {
   SparklesIcon,
   TerminalIcon,
   TrendingUpIcon,
-  TrelloIcon,
   type LucideIcon,
 } from 'lucide-react';
 import Link from 'next/link';
 import Footer from '@/components/footer';
 import { Button, Text } from '@/components/retroui';
 
-const DISCORD_URL = 'https://discord.gg/b8Hjpz4B';
+const DISCORD_URL = 'https://discord.gg/vDQDRz6S';
 const GITHUB_URL = 'https://github.com/opentabs-dev/opentabs';
 
 interface PluginShowcase {
@@ -38,9 +38,9 @@ const plugins: PluginShowcase[] = [
   { name: 'Slack', icon: MessageSquareIcon },
   { name: 'Discord', icon: BotIcon },
   { name: 'GitHub', icon: GitBranchIcon },
-  { name: 'Jira', icon: TrelloIcon },
+  { name: 'Jira', icon: KanbanIcon },
   { name: 'Notion', icon: FileTextIcon },
-  { name: 'Figma', icon: FigmaIcon },
+  { name: 'Figma', icon: FrameIcon },
   { name: 'AWS', icon: CloudIcon },
   { name: 'Stripe', icon: CreditCardIcon },
   { name: 'Robinhood', icon: TrendingUpIcon },

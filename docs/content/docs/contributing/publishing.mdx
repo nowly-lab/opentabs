@@ -1,10 +1,10 @@
 ---
 title: Publishing
 description: How to publish platform packages to npm, manage versions, and update plugin dependencies.
-lastUpdated: 2026-04-15
+lastUpdated: 2026-04-24
 ---
 
-I publish the platform packages as restricted-access packages to the npm registry under the `@opentabs-dev` org. The process is mostly automated, but there are enough moving parts that I wrote it all down. Here's the full workflow.
+I publish the platform packages as public packages to the npm registry under the `@opentabs-dev` org. The process is mostly automated, but there are enough moving parts that I wrote it all down. Here's the full workflow.
 
 ## Packages
 
@@ -101,7 +101,7 @@ The workflow:
 6. Generates a changelog from `git log` since the previous tag
 7. Creates a release commit and tag (`v<version>`)
 
-Six packages use `"publishConfig": { "access": "restricted" }` explicitly. `browser-extension` omits `publishConfig` but is still restricted — npm defaults to restricted access for scoped packages. Only authenticated npm users with access to the `@opentabs-dev` scope can install them.
+All seven packages use `"publishConfig": { "access": "public" }` — they are installable by anyone via `npm install -g <package>`. Scoped npm packages default to restricted access, so the explicit `public` override is required.
 
 ## After Publishing
 

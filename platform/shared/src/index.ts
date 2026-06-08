@@ -58,6 +58,7 @@ export {
   normalizePluginName,
   PLATFORM_PACKAGES,
   PLUGIN_PREFIX,
+  PRE_SCRIPT_FILENAME,
   pluginNameFromPackage,
   resolvePluginPackageCandidates,
   TOOLS_FILENAME,
@@ -357,6 +358,8 @@ export interface ConfigStatePlugin {
   resolvedSettings?: Record<string, unknown>;
   /** Instance name → Chrome match pattern mapping for multi-instance url settings */
   instanceMap?: Record<string, string>;
+  /** Whether this plugin ships a pre-script that runs at document_start in MAIN world */
+  hasPreScript: boolean;
 }
 
 /** A plugin that failed discovery, sent to the side panel for display */

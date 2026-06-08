@@ -84,10 +84,17 @@ import {
 import { notifyConfirmationRequest } from './confirmation-badge.js';
 import { isValidPluginName, RELOAD_FLUSH_DELAY_MS, WS_CONNECTED_KEY } from './constants.js';
 import type { PluginMeta } from './extension-messages.js';
-import { cleanupAdaptersInMatchingTabs, injectPluginIntoMatchingTabs } from './iife-injection.js';
+import { cleanupAdaptersInMatchingTabs, injectPluginIntoMatchingTabs, queryMatchingTabIds } from './iife-injection.js';
 import { JSONRPC_INTERNAL_ERROR, JSONRPC_INVALID_PARAMS, JSONRPC_METHOD_NOT_FOUND } from './json-rpc-errors.js';
 import { forwardToSidePanel, sendTabStateNotification, sendToServer } from './messaging.js';
-import { getAllPluginMeta, removePlugin, removePluginsBatch, storePluginsBatch } from './plugin-storage.js';
+import {
+  getAllPluginMeta,
+  getPluginMeta,
+  removePlugin,
+  removePluginsBatch,
+  storePluginsBatch,
+} from './plugin-storage.js';
+import { removePreScript, syncPreScripts, upsertPreScript } from './pre-script-registration.js';
 import { checkRateLimit } from './rate-limiter.js';
 import { consumeServerResponse } from './server-request.js';
 import {
@@ -175,6 +182,8 @@ interface ValidatedPluginPayload {
   iconInactiveSvg?: string;
   iconDarkSvg?: string;
   iconDarkInactiveSvg?: string;
+  preScriptFile?: string;
+  preScriptHash?: string;
   tools: WireToolDef[];
 }
 
@@ -182,6 +191,7 @@ interface ValidatedPluginPayload {
 interface ServerOnlyPluginFields {
   source: 'npm' | 'local';
   reviewed: boolean;
+  hasPreScript: boolean;
   npmPackageName?: string;
   sdkVersion?: string;
   update?: { latestVersion: string; updateCommand: string };
@@ -193,6 +203,7 @@ interface ServerOnlyPluginFields {
 const extractServerOnlyFields = (raw: Record<string, unknown> | undefined): ServerOnlyPluginFields => ({
   source: raw?.source === 'npm' || raw?.source === 'local' ? raw.source : 'local',
   reviewed: raw?.reviewed === true,
+  hasPreScript: raw?.hasPreScript === true,
   ...(typeof raw?.npmPackageName === 'string' ? { npmPackageName: raw.npmPackageName } : {}),
   ...(typeof raw?.sdkVersion === 'string' ? { sdkVersion: raw.sdkVersion } : {}),
   ...(raw?.update && typeof raw.update === 'object'
@@ -224,6 +235,8 @@ const toPluginMeta = (p: ValidatedPluginPayload): PluginMeta => ({
   iconInactiveSvg: p.iconInactiveSvg,
   iconDarkSvg: p.iconDarkSvg,
   iconDarkInactiveSvg: p.iconDarkInactiveSvg,
+  preScriptFile: p.preScriptFile,
+  preScriptHash: p.preScriptHash,
   tools: p.tools,
 });
 
@@ -347,6 +360,8 @@ const validatePluginPayload = (raw: unknown): ValidatedPluginPayload | null => {
     iconInactiveSvg: typeof obj.iconInactiveSvg === 'string' ? obj.iconInactiveSvg : undefined,
     iconDarkSvg: typeof obj.iconDarkSvg === 'string' ? obj.iconDarkSvg : undefined,
     iconDarkInactiveSvg: typeof obj.iconDarkInactiveSvg === 'string' ? obj.iconDarkInactiveSvg : undefined,
+    preScriptFile: typeof obj.preScriptFile === 'string' ? obj.preScriptFile : undefined,
+    preScriptHash: typeof obj.preScriptHash === 'string' ? obj.preScriptHash : undefined,
     tools,
   };
 };
@@ -426,6 +441,7 @@ const handleSyncFull = async (params: Record<string, unknown>): Promise<void> =>
   const metas: PluginMeta[] = uniquePlugins.map(toPluginMeta);
 
   await storePluginsBatch(metas);
+  await syncPreScripts(metas);
 
   // Inject all plugins into matching tabs in parallel — each plugin's
   // injection is independent and involves cross-process IPC, so parallelizing
@@ -558,9 +574,35 @@ const handlePluginUpdate = async (params: Record<string, unknown>): Promise<void
   const validated = validatePluginPayload(params);
   if (!validated) return;
 
+  const previous = await getPluginMeta(validated.name);
   const meta = toPluginMeta(validated);
 
   await storePluginsBatch([meta]);
+  await upsertPreScript(meta);
+
+  const hashChanged =
+    meta.preScriptFile !== undefined &&
+    previous?.preScriptFile !== undefined &&
+    previous.preScriptHash !== meta.preScriptHash;
+
+  if (hashChanged) {
+    // Pre-script content changed for an already-registered plugin. Chrome's
+    // registered scripts only fire on FUTURE navigations, so tabs currently
+    // open with the stale pre-script must be reloaded for the new pre-script
+    // to take effect. First-time registrations (previous.preScriptFile was
+    // undefined) are NOT auto-reloaded — forcing a reload on first install
+    // would surprise the user mid-task; the new registration applies on the
+    // user's next navigation.
+    const matchingTabIds = await queryMatchingTabIds(meta.urlPatterns, meta.excludePatterns);
+    for (const tabId of matchingTabIds) {
+      try {
+        await chrome.tabs.reload(tabId);
+      } catch (e) {
+        console.warn(`[opentabs] failed to reload tab ${tabId} after pre-script hash change:`, e);
+      }
+    }
+  }
+
   // Force re-injection so the new IIFE overwrites the stale adapter code
   // already present in matching tabs. Without this, injectPluginIntoMatchingTabs
   // skips tabs where the adapter is already injected, leaving old code running.
@@ -654,6 +696,7 @@ const handlePluginUninstall = async (params: Record<string, unknown>, id: string
 
   await removePlugin(pluginName);
   clearPluginTabState(pluginName);
+  await removePreScript(pluginName);
 
   // Remove the uninstalled plugin from the cache so bg:getFullState returns
   // fresh state immediately, without waiting for the server's plugins.changed.

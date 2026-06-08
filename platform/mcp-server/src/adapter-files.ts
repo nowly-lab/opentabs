@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Script } from 'node:vm';
 import { atomicWrite } from '@opentabs-dev/shared';
 import { getAdaptersDir } from './config.js';
 import { log } from './logger.js';
@@ -90,6 +91,36 @@ const writeAdapterFile = async (pluginName: string, iife: string, sourceMap?: st
 };
 
 /**
+ * Write a plugin's pre-script IIFE to the extension's adapters/ directory.
+ * Uses a distinct filename pattern ({pluginName}-prescript-{hash8}.js) so
+ * chrome.scripting.registerContentScripts receives a fresh path on each
+ * version change (Chrome caches scripts by URL). Cleans up old pre-script
+ * versions for the same plugin.
+ *
+ * Returns the relative path (e.g., "adapters/outlook-prescript-a1b2c3d4.js")
+ * for the extension to pass into registerContentScripts.
+ */
+const writePreScriptFile = async (pluginName: string, preScript: string): Promise<string> => {
+  const adaptersDir = getAdaptersDir();
+  const contentHash = createHash('sha256').update(preScript).digest('hex').slice(0, 8);
+  const baseName = `${pluginName}-prescript-${contentHash}`;
+
+  await atomicWrite(join(adaptersDir, `${baseName}.js`), preScript);
+
+  let entries: string[];
+  try {
+    entries = await readdir(adaptersDir);
+  } catch {
+    entries = [];
+  }
+  const preScriptRegex = new RegExp(`^${escapeRegex(pluginName)}-prescript-[0-9a-f]{8}\\.js$`);
+  const oldFiles = entries.filter(f => preScriptRegex.test(f) && f !== `${baseName}.js`);
+  await Promise.allSettled(oldFiles.map(f => unlink(join(adaptersDir, f))));
+
+  return `adapters/${baseName}.js`;
+};
+
+/**
  * Remove stale adapter .js files from the adapters directory that do not
  * correspond to any plugin in the current set. Called from writeAllAdapterFiles
  * (and transitively from sendSyncFull and reloadCore) before writing new adapter files.
@@ -105,8 +136,12 @@ const cleanupStaleAdapterFiles = async (currentPluginNames: Set<string>): Promis
   }
 
   // Strip the content hash suffix (-[0-9a-f]{8}) from hashed filenames
-  // to recover the plugin name for staleness checks.
-  const stripHash = (name: string): string => name.replace(/-[0-9a-f]{8}$/, '');
+  // to recover the plugin name for staleness checks. Also strips the
+  // -prescript infix so pre-script files for known plugins are not deleted.
+  const stripHash = (name: string): string => {
+    const withoutHash = name.replace(/-[0-9a-f]{8}$/, '');
+    return withoutHash.replace(/-prescript$/, '');
+  };
 
   const staleFiles = entries.filter(f => {
     if (f.endsWith('.js.tmp') || f.endsWith('.js.map.tmp')) return false;
@@ -149,11 +184,45 @@ const cleanupStaleAdapterFiles = async (currentPluginNames: Set<string>): Promis
 // ---------------------------------------------------------------------------
 
 /**
+ * Returns true if `code` is syntactically valid as a JavaScript expression —
+ * i.e., it can be placed in `(async () => (CODE))()` without a SyntaxError.
+ * Detection runs in Node.js via vm.Script so no browser eval is needed.
+ */
+const isExpression = (code: string): boolean => {
+  try {
+    // eslint-disable-next-line no-new
+    new Script(`(async () => (${code}))()`);
+    return true;
+  } catch (e) {
+    if (e instanceof SyntaxError) return false;
+    throw e;
+  }
+};
+
+/**
  * Write a dynamic exec script to the adapters/ directory.
- * Wraps the user's code in an IIFE that captures the result (sync or async)
+ * Wraps the user's code in an IIFE that evaluates it expression-first
+ * (Chrome DevTools console / Node REPL semantics) and captures the result
  * into namespaced keys on globalThis.__openTabs for the extension to read back.
  * Each execution uses keys derived from its UUID (`__execResult_<uuid>` and
  * `__execAsync_<uuid>`) so concurrent executions on the same tab do not collide.
+ *
+ * Two-path evaluation (detection is server-side via vm.Script, not browser eval):
+ * 1. Expression path — user code is syntactically valid as an expression (no
+ *    `return`, no multi-statement body). Inlined as `(async () => (CODE))()`.
+ *    Returns bare values, IIFEs, `await EXPR`, object literals directly.
+ * 2. Statement path — code contains statements (`return`, multi-statement
+ *    bodies, `throw`, etc.). Inlined as `(async function() { CODE })()`.
+ *    Top-level `return` and `await` both work.
+ *
+ * Neither path uses eval or new Function in the generated browser code, so
+ * both paths work on pages with a strict Content-Security-Policy that blocks
+ * `unsafe-eval`. The file itself is injected via chrome.scripting.executeScript
+ * ({ files, world: 'MAIN' }), which bypasses page CSP for the file injection.
+ *
+ * The __startedKey sentinel is set synchronously before the try block so the
+ * extension-side poller can distinguish "IIFE hasn't executed yet" from
+ * "async result pending".
  *
  * Returns the filename (relative to adapters/) for the extension to inject.
  */
@@ -166,24 +235,11 @@ const writeExecFile = async (state: ServerState, execId: string, code: string): 
   const asyncKey = `__execAsync_${execId}`;
   const startedKey = `__execStarted_${execId}`;
 
-  // Wrap user code to capture async results and errors.
-  // The wrapper stores results at namespaced keys on globalThis.__openTabs
-  // so concurrent executions do not collide. The extension reads the
-  // namespaced key matching this execution's UUID and cleans it up.
-  //
-  // The __startedKey sentinel is set synchronously at the top of the IIFE
-  // before the try block, so the polling function can distinguish between
-  // "IIFE hasn't executed yet" (keep polling) and "sync code produced no
-  // result" (genuine failure).
-  //
-  // User code is placed inline inside an async function expression so that
-  // `await` works in user code. The async function always returns a Promise,
-  // so results are always delivered via .then(). Using .then(onFulfilled,
-  // onRejected) instead of .then().catch() handles rejections in one
-  // microtask hop instead of two, tightening the timing window.
-  //
-  // The file is injected via chrome.scripting.executeScript({ files }), which
-  // runs as extension-origin code and bypasses page CSP entirely.
+  // Choose the wrapper shape based on server-side syntax detection.
+  // Expression path: (async () => (CODE))()  — returns the expression value.
+  // Statement path:  (async function() { CODE })()  — supports return/await.
+  const useExpression = isExpression(code);
+
   const wrapped = [
     '(function() {',
     '  var __ot = globalThis.__openTabs = globalThis.__openTabs || {};',
@@ -192,9 +248,9 @@ const writeExecFile = async (state: ServerState, execId: string, code: string): 
     `  var __startedKey = ${JSON.stringify(startedKey)};`,
     '  __ot[__startedKey] = true;',
     '  try {',
-    '    (async function() {',
+    useExpression ? '    (async () => (' : '    (async function() {',
     code,
-    '    })().then(',
+    useExpression ? '    ))().then(' : '    })().then(',
     '      function(v) { __ot[__resultKey] = { value: v }; },',
     '      function(e) { __ot[__resultKey] = { error: e instanceof Error ? e.message : String(e) }; }',
     '    );',
@@ -250,4 +306,5 @@ export {
   timeoutRace,
   writeAdapterFile,
   writeExecFile,
+  writePreScriptFile,
 };

@@ -17,7 +17,8 @@ export const deleteSources = defineTool({
     success: z.boolean().describe('Whether the operation succeeded'),
   }),
   handle: async params => {
-    await rpc('tGMBJ', [params.notebook_id, params.source_ids], `/notebook/${params.notebook_id}`);
+    const sourceRefs = params.source_ids.map(id => [id]);
+    await rpc('tGMBJ', [sourceRefs, [2]], `/notebook/${params.notebook_id}`);
     return { success: true };
   },
 });

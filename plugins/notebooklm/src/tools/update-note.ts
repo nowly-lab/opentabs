@@ -18,7 +18,7 @@ export const updateNote = defineTool({
     success: z.boolean().describe('Whether the operation succeeded'),
   }),
   handle: async params => {
-    await rpc('cYAfTb', [params.notebook_id, params.note_id, params.content], `/notebook/${params.notebook_id}`);
+    await rpc('cYAfTb', [params.notebook_id, params.note_id, [[[params.content]]]], `/notebook/${params.notebook_id}`);
     return { success: true };
   },
 });

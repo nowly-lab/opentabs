@@ -26,7 +26,7 @@ export const getNotes = defineTool({
     const notesList = (data?.[0] as unknown[][] | undefined) ?? [];
     const syncToken = (data?.[1] as number[] | undefined) ?? [];
     return {
-      notes: notesList.map(n => mapNote(n)),
+      notes: notesList.map(n => mapNote(n)).filter(n => n.created_at_seconds > 0),
       sync_token_seconds: syncToken[0] ?? 0,
     };
   },

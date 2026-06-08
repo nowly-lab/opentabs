@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import type { RegisteredPlugin } from './state.js';
 
 // --- PostHog mock via vi.mock ---
 
@@ -518,5 +519,167 @@ describe('classifyLoadFailures', () => {
     const failures = [{ path: '/a', error: 'SDK version mismatch' }];
 
     expect(classifyLoadFailures(failures).schema_error).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plugin usage telemetry
+// ---------------------------------------------------------------------------
+
+const makePlugin = (overrides: Partial<RegisteredPlugin> = {}): RegisteredPlugin => ({
+  name: 'slack',
+  version: '0.0.82',
+  displayName: 'Slack',
+  urlPatterns: [],
+  excludePatterns: [],
+  iife: '',
+  tools: [],
+  source: 'npm',
+  npmPackageName: '@opentabs-dev/opentabs-plugin-slack',
+  ...overrides,
+});
+
+describe('isTrackablePlugin', () => {
+  test('accepts first-party npm plugin', async () => {
+    const { isTrackablePlugin } = await importTelemetry();
+    expect(isTrackablePlugin(makePlugin())).toBe(true);
+  });
+
+  test('rejects local plugin', async () => {
+    const { isTrackablePlugin } = await importTelemetry();
+    expect(isTrackablePlugin(makePlugin({ source: 'local', npmPackageName: undefined }))).toBe(false);
+  });
+
+  test('rejects third-party npm scope', async () => {
+    const { isTrackablePlugin } = await importTelemetry();
+    expect(isTrackablePlugin(makePlugin({ name: 'foo', npmPackageName: '@someone/opentabs-plugin-foo' }))).toBe(false);
+  });
+
+  test('rejects unscoped npm plugin', async () => {
+    const { isTrackablePlugin } = await importTelemetry();
+    expect(isTrackablePlugin(makePlugin({ name: 'foo', npmPackageName: 'opentabs-plugin-foo' }))).toBe(false);
+  });
+
+  test('rejects onlyfans even with first-party metadata', async () => {
+    const { isTrackablePlugin } = await importTelemetry();
+    expect(
+      isTrackablePlugin(makePlugin({ name: 'onlyfans', npmPackageName: '@opentabs-dev/opentabs-plugin-onlyfans' })),
+    ).toBe(false);
+  });
+
+  test('rejects tinder even with first-party metadata', async () => {
+    const { isTrackablePlugin } = await importTelemetry();
+    expect(
+      isTrackablePlugin(makePlugin({ name: 'tinder', npmPackageName: '@opentabs-dev/opentabs-plugin-tinder' })),
+    ).toBe(false);
+  });
+});
+
+describe('trackPluginToolUsage', () => {
+  test('fires plugin_tool_used event for trackable plugin', async () => {
+    makeTestDir();
+    const tel = await importTelemetry();
+    await tel.initTelemetry();
+    mockCapture.mockClear();
+
+    tel.trackPluginToolUsage(makePlugin(), 'send_message', { success: true, durationMs: 50 });
+
+    const pluginToolCall = mockCapture.mock.calls.find(
+      ([args]) => (args as { event: string }).event === 'plugin_tool_used',
+    );
+    expect(pluginToolCall).toBeDefined();
+    const props = (pluginToolCall?.[0] as { properties: Record<string, unknown> }).properties;
+    expect(props).toMatchObject({
+      plugin_name: 'slack',
+      plugin_version: '0.0.82',
+      tool_name: 'send_message',
+      success: true,
+      error_category: 'none',
+      duration_bucket: '<100ms',
+    });
+    expect(props.session_id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  test('uses errorCategory when provided for failed calls', async () => {
+    makeTestDir();
+    const tel = await importTelemetry();
+    await tel.initTelemetry();
+    mockCapture.mockClear();
+
+    tel.trackPluginToolUsage(makePlugin(), 'send_message', {
+      success: false,
+      errorCategory: 'auth',
+      durationMs: 1500,
+    });
+
+    const pluginToolCall = mockCapture.mock.calls.find(
+      ([args]) => (args as { event: string }).event === 'plugin_tool_used',
+    );
+    const props = (pluginToolCall?.[0] as { properties: Record<string, unknown> }).properties;
+    expect(props.success).toBe(false);
+    expect(props.error_category).toBe('auth');
+    expect(props.duration_bucket).toBe('<5s');
+  });
+
+  test('uses unknown when errorCategory is missing for failed calls', async () => {
+    makeTestDir();
+    const tel = await importTelemetry();
+    await tel.initTelemetry();
+    mockCapture.mockClear();
+
+    tel.trackPluginToolUsage(makePlugin(), 'send_message', { success: false, durationMs: 50 });
+
+    const pluginToolCall = mockCapture.mock.calls.find(
+      ([args]) => (args as { event: string }).event === 'plugin_tool_used',
+    );
+    const props = (pluginToolCall?.[0] as { properties: Record<string, unknown> }).properties;
+    expect(props.error_category).toBe('unknown');
+  });
+
+  test('fires no event for excluded plugin', async () => {
+    makeTestDir();
+    const tel = await importTelemetry();
+    await tel.initTelemetry();
+    mockCapture.mockClear();
+
+    tel.trackPluginToolUsage(
+      makePlugin({ name: 'onlyfans', npmPackageName: '@opentabs-dev/opentabs-plugin-onlyfans' }),
+      'send_message',
+      { success: true, durationMs: 50 },
+    );
+
+    const calls = mockCapture.mock.calls.filter(([args]) => (args as { event: string }).event === 'plugin_tool_used');
+    expect(calls).toHaveLength(0);
+  });
+
+  test('fires no event for local plugin', async () => {
+    makeTestDir();
+    const tel = await importTelemetry();
+    await tel.initTelemetry();
+    mockCapture.mockClear();
+
+    tel.trackPluginToolUsage(makePlugin({ source: 'local', npmPackageName: undefined }), 'send_message', {
+      success: true,
+      durationMs: 50,
+    });
+
+    const calls = mockCapture.mock.calls.filter(([args]) => (args as { event: string }).event === 'plugin_tool_used');
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('computeDurationBucket', () => {
+  test.each([
+    [0, '<100ms'],
+    [99, '<100ms'],
+    [100, '<1s'],
+    [999, '<1s'],
+    [1000, '<5s'],
+    [4999, '<5s'],
+    [5000, '>=5s'],
+    [99999, '>=5s'],
+  ] as const)('bucket for %dms is %s', async (ms, expected) => {
+    const { computeDurationBucket } = await importTelemetry();
+    expect(computeDurationBucket(ms)).toBe(expected);
   });
 });

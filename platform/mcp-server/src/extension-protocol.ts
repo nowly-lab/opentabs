@@ -16,6 +16,7 @@ import {
   timeoutRace,
   writeAdapterFile,
   writeExecFile,
+  writePreScriptFile,
 } from './adapter-files.js';
 import type { McpCallbacks } from './extension-handlers.js';
 import {
@@ -68,19 +69,27 @@ const MAX_MESSAGE_SIZE = 10 * 1024 * 1024;
  * exist on disk before the extension connects, and again from sendSyncFull
  * when the extension is connected.
  */
-const writeAllAdapterFiles = async (state: ServerState): Promise<Map<string, string>> => {
+const writeAllAdapterFiles = async (
+  state: ServerState,
+): Promise<Map<string, { adapterFile: string; preScriptFile?: string }>> => {
   const pluginList = Array.from(state.registry.plugins.values());
   await ensureAdaptersDir(state);
 
   const currentPluginNames = new Set(pluginList.map(p => p.name));
   await cleanupStaleAdapterFiles(currentPluginNames);
 
-  const writePromise = Promise.allSettled(pluginList.map(p => writeAdapterFile(p.name, p.iife, p.iifeSourceMap)));
+  const writePromise = Promise.allSettled(
+    pluginList.map(async p => {
+      const adapterFile = await writeAdapterFile(p.name, p.iife, p.iifeSourceMap);
+      const preScriptFile = p.preScript ? await writePreScriptFile(p.name, p.preScript) : undefined;
+      return { adapterFile, preScriptFile };
+    }),
+  );
   const timeout = timeoutRace<null>(null, ADAPTER_WRITE_TIMEOUT_MS);
   const writeResults = await Promise.race([writePromise, timeout.promise]);
   timeout.cancel();
 
-  const adapterFileMap = new Map<string, string>();
+  const adapterFileMap = new Map<string, { adapterFile: string; preScriptFile?: string }>();
   if (writeResults === null) {
     log.warn(
       `Adapter file writes did not complete within ${ADAPTER_WRITE_TIMEOUT_MS}ms. Pending plugins: ${pluginList.map(p => p.name).join(', ')}`,
@@ -116,16 +125,19 @@ const sendSyncFull = async (state: ServerState): Promise<void> => {
 
   const plugins = pluginList.map(p => {
     const configPlugin = configPluginMap.get(p.name);
+    const files = adapterFileMap.get(p.name);
     return {
       ...serializePluginForExtension(state, p),
       sourcePath: p.sourcePath,
       adapterHash: p.adapterHash,
-      adapterFile: adapterFileMap.get(p.name),
+      adapterFile: files?.adapterFile,
       source: configPlugin?.source ?? p.source,
       ...(configPlugin?.sdkVersion ? { sdkVersion: configPlugin.sdkVersion } : {}),
       ...(configPlugin?.update ? { update: configPlugin.update } : {}),
       ...(configPlugin?.configSchema ? { configSchema: configPlugin.configSchema } : {}),
       ...(configPlugin?.resolvedSettings ? { resolvedSettings: configPlugin.resolvedSettings } : {}),
+      ...(files?.preScriptFile ? { preScriptFile: files.preScriptFile } : {}),
+      ...(p.preScriptHash ? { preScriptHash: p.preScriptHash } : {}),
     };
   });
 
@@ -448,6 +460,7 @@ const sendPluginUpdate = async (
 
   await ensureAdaptersDir(state);
   const adapterFile = await writeAdapterFile(pluginName, iife, sourceMap);
+  const preScriptFile = plugin.preScript ? await writePreScriptFile(pluginName, plugin.preScript) : undefined;
 
   const userSettings = state.pluginSettings[pluginName];
   const { resolvedValues } = resolvePluginSettings(
@@ -469,6 +482,8 @@ const sendPluginUpdate = async (
       adapterFile,
       ...(plugin.configSchema ? { configSchema: plugin.configSchema } : {}),
       ...(hasResolvedSettings ? { resolvedSettings: resolvedValues } : {}),
+      ...(preScriptFile ? { preScriptFile } : {}),
+      ...(plugin.preScriptHash ? { preScriptHash: plugin.preScriptHash } : {}),
     },
   });
   if (!sent) log.warn('Failed to send plugin.update — extension not connected');

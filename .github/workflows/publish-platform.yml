@@ -105,11 +105,11 @@ jobs:
           "
           echo "Bumped manifest.json → $VERSION"
 
-          # Re-format files touched by JSON.stringify so they match biome's formatter
-          npx biome format --write platform/browser-extension/manifest.json platform/*/package.json
-
       - name: Install dependencies (update lockfile for version changes)
         run: npm install
+
+      - name: Re-format files touched by JSON.stringify so they match biome's formatter
+        run: npx @biomejs/biome format --write platform/browser-extension/manifest.json platform/*/package.json
 
       - name: Build all packages
         run: npm run build:force

@@ -17,7 +17,7 @@ export const deleteNotes = defineTool({
     success: z.boolean().describe('Whether the operation succeeded'),
   }),
   handle: async params => {
-    await rpc('AH0mwd', [params.notebook_id, params.note_ids], `/notebook/${params.notebook_id}`);
+    await rpc('AH0mwd', [params.notebook_id, null, params.note_ids], `/notebook/${params.notebook_id}`);
     return { success: true };
   },
 });

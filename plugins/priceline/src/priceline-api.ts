@@ -12,7 +12,9 @@ import {
 import type { FetchFromPageOptions } from '@opentabs-dev/plugin-sdk';
 
 const GRAPH_BASE = 'https://www.priceline.com/pws/v0/pcln-graph/?gqlOp=';
+const FLY_GRAPH_URL = 'https://www.priceline.com/pws/v0/fly/graph/query';
 const REST_BASE = 'https://www.priceline.com/pws/v0';
+const AC_BASE = 'https://www.priceline.com/svcs/ac/index';
 
 // --- Auth ---
 
@@ -106,7 +108,7 @@ interface GraphQLResponse {
 export const graphql = async <T>(
   operationName: string,
   variables: Record<string, unknown>,
-  persistedHash?: string,
+  queryOrPersistedHash?: string,
 ): Promise<T> => {
   const auth = requireAuth();
 
@@ -117,10 +119,15 @@ export const graphql = async <T>(
     variables,
   };
 
-  if (persistedHash) {
+  // Persisted query hashes are 64-char hex strings; anything else is treated as an inline query document.
+  const isPersistedHash = typeof queryOrPersistedHash === 'string' && /^[a-f0-9]{64}$/.test(queryOrPersistedHash);
+
+  if (queryOrPersistedHash && isPersistedHash) {
     reqBody.extensions = {
-      persistedQuery: { version: 1, sha256Hash: persistedHash },
+      persistedQuery: { version: 1, sha256Hash: queryOrPersistedHash },
     };
+  } else if (queryOrPersistedHash) {
+    reqBody.query = queryOrPersistedHash;
   }
 
   const headers: Record<string, string> = {
@@ -174,4 +181,63 @@ export const rest = async <T>(
   const data = await fetchJSON<T>(url);
   if (data === undefined) throw ToolError.internal(`Empty response from ${endpoint}`);
   return data;
+};
+
+// --- Autocomplete / Typeahead ---
+
+interface AutocompleteResponse<T> {
+  resultCode?: number;
+  resultMessage?: string;
+  searchItems?: T[];
+}
+
+// Fetches from /svcs/ac/index/{product}/{query}/0/9/0/0 — the autocomplete service used
+// by the flight, hotel, and car search widgets. Returns up to 9 results for the given query.
+export const autocomplete = async <T>(product: 'flights' | 'hotels' | 'cars', query: string): Promise<T[]> => {
+  const encoded = encodeURIComponent(query);
+  const url = `${AC_BASE}/${product}/${encoded}/0/9/0/0`;
+  const data = await fetchJSON<AutocompleteResponse<T>>(url);
+  return data?.searchItems ?? [];
+};
+
+// --- Flight GraphQL API ---
+//
+// The flight graph endpoint lives at /pws/v0/fly/graph/query and is separate from
+// the shared pcln-graph endpoint used by hotels. It does not require the Okta bearer
+// token — cookie-based session auth is sufficient. Schema introspection is enabled,
+// so operations use inline queries with named variables.
+
+interface FlyGraphResponse<T> {
+  data?: T;
+  errors?: Array<{ message?: string; extensions?: { code?: string } }>;
+}
+
+export const flyGraphql = async <T>(
+  operationName: string,
+  variables: Record<string, unknown>,
+  query: string,
+): Promise<T> => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'apollographql-client-name': 'm-fly-search',
+    'apollographql-client-version': 'main-0.0.19',
+  };
+
+  const resp =
+    (await fetchJSON<FlyGraphResponse<T>>(FLY_GRAPH_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ operationName, variables, query }),
+    })) ?? ({} as FlyGraphResponse<T>);
+
+  const errors = resp.errors ?? [];
+  if (errors.length > 0 && !resp.data) {
+    const first = errors[0] ?? {};
+    const code = first.extensions?.code ?? '';
+    const message = first.message ?? 'Unknown GraphQL error';
+    if (code === 'UNAUTHENTICATED') throw ToolError.auth(`Auth error: ${message}`);
+    throw ToolError.internal(`GraphQL error (${operationName}): ${message}`);
+  }
+
+  return (resp.data ?? ({} as T)) as T;
 };

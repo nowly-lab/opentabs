@@ -245,9 +245,13 @@ vi.mock('./logger.js', () => ({
   log: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 
-const { mockTrackEvent } = vi.hoisted(() => ({ mockTrackEvent: vi.fn() }));
+const { mockTrackEvent, mockTrackPluginToolUsage } = vi.hoisted(() => ({
+  mockTrackEvent: vi.fn(),
+  mockTrackPluginToolUsage: vi.fn(),
+}));
 vi.mock('./telemetry.js', () => ({
   trackEvent: mockTrackEvent,
+  trackPluginToolUsage: mockTrackPluginToolUsage,
   getSessionId: vi.fn().mockReturnValue('test-session-id'),
 }));
 
@@ -271,6 +275,7 @@ const createMockState = (overrides: Partial<ServerState> = {}): ServerState =>
     skipPermissions: false,
     pluginPermissions: {},
     pendingConfirmations: new Map(),
+    registry: { plugins: new Map(), toolLookup: new Map(), failures: [] },
     ...overrides,
   }) as unknown as ServerState;
 
