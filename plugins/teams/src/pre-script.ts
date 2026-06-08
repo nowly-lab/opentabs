@@ -171,7 +171,10 @@ definePreScript(({ set, log }) => {
                 const entJwt = typeof tokens?.skypeToken === 'string' ? tokens.skypeToken : null;
                 if (entJwt) {
                   const expiresIn = typeof tokens?.expiresIn === 'number' ? tokens.expiresIn : 3600;
-                  set('skypeJwt', { secret: entJwt, expiresOn: Math.floor(Date.now() / 1000) + expiresIn } as CapturedToken);
+                  set('skypeJwt', {
+                    secret: entJwt,
+                    expiresOn: Math.floor(Date.now() / 1000) + expiresIn,
+                  } as CapturedToken);
                   log.debug('[teams] captured Skype JWT from authsvc response');
                   return;
                 }
@@ -181,7 +184,10 @@ definePreScript(({ set, log }) => {
                 const conJwt = typeof skypeToken?.skypetoken === 'string' ? skypeToken.skypetoken : null;
                 if (conJwt) {
                   const expiresIn = typeof skypeToken?.expiresIn === 'number' ? skypeToken.expiresIn : 3600;
-                  set('skypeJwt', { secret: conJwt, expiresOn: Math.floor(Date.now() / 1000) + expiresIn } as CapturedToken);
+                  set('skypeJwt', {
+                    secret: conJwt,
+                    expiresOn: Math.floor(Date.now() / 1000) + expiresIn,
+                  } as CapturedToken);
                   log.debug('[teams] captured Skype JWT from authsvc response (consumer)');
                 }
               })
