@@ -311,13 +311,12 @@ test.describe('Dev proxy health during worker restart window', () => {
       }
       expect([0, 502, 503]).toContain(degradedStatus);
 
-      // Trigger a hot reload so a new worker starts.
-      server.triggerHotReload();
+      // The proxy auto-respawns a crashed worker after a short backoff. Wait
+      // for the replacement worker to report ready (the crash-respawn reuses
+      // the restart path, so this also re-initializes MCP sessions).
+      await waitForLog(server, 'Worker ready on port', 15_000);
 
-      // Wait for the new worker to be ready
-      await waitForLog(server, 'Hot reload complete', 15_000);
-
-      // Confirm the server is fully healthy after the transition
+      // Confirm the server is fully healthy after self-healing
       const finalHealth = await server.health();
       expect(finalHealth).not.toBeNull();
       if (!finalHealth) throw new Error('health returned null after transition');
@@ -329,43 +328,62 @@ test.describe('Dev proxy health during worker restart window', () => {
   });
 });
 
-test.describe('Dev proxy 503 timeout', () => {
-  test('returns 503 when worker is dead and no restart is triggered', async () => {
+test.describe('Dev proxy crash-loop circuit breaker', () => {
+  test('repeated worker crashes trip the breaker, then the proxy returns 503', async () => {
     const configDir = createTestConfigDir();
     const server = await startMcpServer(configDir, true);
 
     try {
-      // Verify server is healthy before killing the worker
+      // Verify server is healthy before crashing the worker
       const initialHealth = await server.health();
       expect(initialHealth).not.toBeNull();
       if (!initialHealth) throw new Error('health returned null');
       expect(initialHealth.status).toBe('ok');
 
-      // Find the worker child process. The proxy (server.proc) forks a worker
-      // via child_process.fork(). Use pgrep to find child PIDs of the proxy.
       const proxyPid = server.proc.pid;
       if (proxyPid === undefined) throw new Error('proxy PID is undefined');
 
-      const pgrepOutput = execSync(`pgrep -P ${proxyPid}`, { encoding: 'utf-8' }).trim();
-      const workerPids = pgrepOutput
-        .split('\n')
-        .map(s => Number(s.trim()))
-        .filter(n => !Number.isNaN(n) && n > 0);
-      expect(workerPids.length).toBeGreaterThan(0);
+      // Kill the current worker child of the proxy, if any. Returns true if at
+      // least one worker process was signalled.
+      const killWorker = (): boolean => {
+        let pgrepOutput = '';
+        try {
+          pgrepOutput = execSync(`pgrep -P ${proxyPid}`, { encoding: 'utf-8' }).trim();
+        } catch {
+          // pgrep exits non-zero when there are no children — no worker yet
+          return false;
+        }
+        const workerPids = pgrepOutput
+          .split('\n')
+          .map(s => Number(s.trim()))
+          .filter(n => !Number.isNaN(n) && n > 0);
+        for (const pid of workerPids) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Already gone between pgrep and kill
+          }
+        }
+        return workerPids.length > 0;
+      };
 
-      // Kill the worker with SIGKILL so it dies immediately. The proxy's exit
-      // handler sets worker = null and workerPort = null but does NOT call
-      // startWorker() — only SIGUSR1 or file changes trigger a restart.
-      for (const pid of workerPids) {
-        process.kill(pid, 'SIGKILL');
+      // The proxy auto-respawns a crashed worker, so a single kill self-heals.
+      // Repeatedly kill the worker faster than it can stay up to trip the
+      // crash-loop circuit breaker (5 crashes within a 10s window), after
+      // which the proxy stops respawning.
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        killWorker();
+        // Poll quickly so we catch and kill each freshly respawned worker
+        // before it stabilizes, accumulating crashes inside the window.
+        await new Promise(resolve => setTimeout(resolve, 300));
+        if (server.logs.join('\n').includes('not respawning')) break;
       }
 
-      // Wait for the proxy to detect the worker exit
-      await waitForLog(server, 'Worker exited', 5_000);
+      await waitForLog(server, 'not respawning', 5_000);
 
-      // Send an HTTP request. With no worker running and no restart triggered,
-      // the proxy's whenReady() buffers the request for READY_TIMEOUT_MS (5s)
-      // then calls the onTimeout callback, returning 503.
+      // With the breaker tripped and no worker running, whenReady() buffers the
+      // request for READY_TIMEOUT_MS (5s) then returns 503 via onTimeout.
       const headers: Record<string, string> = {};
       if (server.secret) headers.Authorization = `Bearer ${server.secret}`;
 

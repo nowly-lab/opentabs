@@ -16,11 +16,22 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import type { WsHandle } from '@opentabs-dev/shared';
 import type { RawData } from 'ws';
 import { WebSocketServer } from 'ws';
+import { MAX_MESSAGE_SIZE } from './extension-protocol.js';
 import type { ServerAdapter } from './http-routes.js';
 import { log } from './logger.js';
 
-/** Maximum HTTP request body size (10 MB, matching the WebSocket maxPayload) */
+/** Maximum HTTP request body size (10 MB) */
 const MAX_BODY_SIZE = 10 * 1024 * 1024;
+
+/**
+ * Hard protocol-layer backstop for inbound WebSocket frames. Set above the
+ * application-level MAX_MESSAGE_SIZE so a slightly-oversized message is dropped
+ * gracefully by handleExtensionMessage (which logs and returns) instead of
+ * being rejected by the ws receiver — a rejection emits a connection 'error'
+ * (status 1009) and closes the socket. Only a frame larger than this backstop
+ * trips the protocol layer.
+ */
+const MAX_WS_PAYLOAD = MAX_MESSAGE_SIZE * 2;
 
 /** Thrown by collectBody when the incoming body exceeds MAX_BODY_SIZE */
 class BodyTooLargeError extends Error {
@@ -261,6 +272,17 @@ const handleWsUpgradeEvent = (
 
         ws.on('close', () => options.websocket.close(handle));
 
+        // A connection-level 'error' (e.g. an oversized frame exceeding
+        // maxPayload, which closes with status 1009, or any protocol error)
+        // is emitted on the socket itself. Without a listener, Node treats it
+        // as an unhandled 'error' event and crashes the entire process. Log it
+        // and terminate the connection; the 'close' event that follows runs the
+        // normal cleanup via options.websocket.close.
+        ws.on('error', (err: Error) => {
+          log.error('WebSocket connection error:', err);
+          ws.terminate();
+        });
+
         options.websocket.open(handle);
       });
     } catch (err) {
@@ -287,8 +309,7 @@ const createNodeServer = (options: NodeServerOptions): Promise<NodeServer> =>
   new Promise((resolveServer, rejectServer) => {
     const wss = new WebSocketServer({
       noServer: true,
-      /** Matches MAX_MESSAGE_SIZE in extension-protocol.ts and MAX_BODY_SIZE above */
-      maxPayload: MAX_BODY_SIZE,
+      maxPayload: MAX_WS_PAYLOAD,
     });
 
     // Per-request header map keyed by the IncomingMessage that triggered the
