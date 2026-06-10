@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # OIDC token for npm trusted publishing (no long-lived NPM_TOKEN needed)
+      id-token: write
     steps:
       - name: Generate release bot token
         id: app-token
@@ -40,6 +42,10 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      # npm trusted publishing (OIDC) requires npm >= 11.5.1; Node 22 ships 10.x.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
 
       - name: Validate version format
         run: |
@@ -171,8 +177,6 @@ jobs:
 
       - name: Publish packages to npm (dependency order)
         if: ${{ !inputs.dry-run }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION="${{ inputs.version }}"
           PACKAGES=(
