@@ -451,14 +451,16 @@ test.describe('Tab state sync — 5-tab churn', () => {
     await waitForLog(mcpServer, 'plugin(s) mapped');
     await testServer.reset();
 
-    // Open 5 tabs sequentially. Opening in parallel via Promise.all can
-    // race with browser context limits, causing "Target page has been closed"
-    // errors on page.goto. Navigations are fire-and-forget (.catch swallows
-    // rejections from tabs closed before their navigation completes).
+    // Open 5 tabs sequentially. Each navigation is awaited so that no
+    // navigation is still in-flight when the test closes tabs or when the
+    // context is torn down — a pending page.goto on a page being closed
+    // deadlocks context.close() during fixture teardown. The per-navigation
+    // guard tolerates a tab being closed mid-load (the resulting rejection is
+    // expected and does not fail the test).
     const tabs: Awaited<ReturnType<typeof extensionContext.newPage>>[] = [];
     for (let i = 0; i < 5; i++) {
       const page = await extensionContext.newPage();
-      page.goto(testServer.url, { waitUntil: 'load' }).catch(() => {});
+      await page.goto(testServer.url, { waitUntil: 'load' }).catch(() => {});
       tabs.push(page);
     }
     const [tab0, tab1, tab2, tab3, tab4] = tabs;
