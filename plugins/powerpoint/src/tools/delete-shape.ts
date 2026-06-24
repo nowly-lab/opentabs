@@ -1,23 +1,24 @@
 import { defineTool, ToolError } from '@opentabs-dev/plugin-sdk';
 import { z } from 'zod';
-import { downloadPptx, getSlideList, replaceSlideText, TEXT_DECODER, TEXT_ENCODER, uploadPptx } from '../pptx-utils.js';
+import { downloadPptx, getSlideList, TEXT_DECODER, TEXT_ENCODER, uploadPptx } from '../pptx-utils.js';
+import { deleteShapeById } from '../slide-edit.js';
 
-export const updateSlideText = defineTool({
-  name: 'update_slide_text',
-  displayName: 'Update Slide Text',
+export const deleteShape = defineTool({
+  name: 'delete_shape',
+  displayName: 'Delete Shape',
   description:
-    "Replace the text of a slide's first (primary/title) text box, one paragraph per line. Use \\n to separate lines. " +
-    'For precise control over a specific shape — including non-title text boxes — use `update_shape` with a shape id from `get_slide_layout` instead.',
-  summary: 'Replace text in a slide’s primary text box',
-  icon: 'pencil',
+    'Remove a shape from a slide. Find the shape id via `get_slide_layout`. ' +
+    'Deleting a group removes all of its child shapes.',
+  summary: 'Remove a shape from a slide',
+  icon: 'trash-2',
   group: 'Slides',
   input: z.object({
     item_id: z.string().describe('Item ID of the PowerPoint file'),
     slide_number: z.number().int().min(1).describe('Slide number (1-indexed)'),
-    text: z.string().describe('New text content for the slide (use \\n for line breaks)'),
+    shape_id: z.string().describe('Shape id from get_slide_layout'),
   }),
   output: z.object({
-    success: z.boolean().describe('Whether the update succeeded'),
+    success: z.boolean().describe('Whether the deletion succeeded'),
   }),
   handle: async params => {
     const entries = await downloadPptx(params.item_id);
@@ -33,8 +34,8 @@ export const updateSlideText = defineTool({
     if (!slideData) throw ToolError.internal(`Slide file not found in archive: ${file}`);
 
     const slideXml = TEXT_DECODER.decode(slideData);
-    const updatedXml = replaceSlideText(slideXml, params.text);
-    entries.set(file, TEXT_ENCODER.encode(updatedXml));
+    const updated = deleteShapeById(slideXml, params.shape_id);
+    entries.set(file, TEXT_ENCODER.encode(updated));
 
     await uploadPptx(params.item_id, entries);
     return { success: true };
