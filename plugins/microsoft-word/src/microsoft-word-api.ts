@@ -1,6 +1,7 @@
 import {
   ToolError,
   buildQueryString,
+  clearAuthCache,
   findLocalStorageEntry,
   getCurrentUrl,
   getLocalStorage,
@@ -108,7 +109,7 @@ const getToken = (): string | null => getCapturedToken() ?? getMsalToken();
 export const getGraphToken = (): string => {
   const token = getToken();
   if (token) return token;
-  return authError('Not authenticated — please sign in to Microsoft 365.');
+  return authError(NOT_AUTHENTICATED_MESSAGE);
 };
 
 export const isAuthenticated = (): boolean => getToken() !== null;
@@ -137,8 +138,19 @@ export const isSharePointDocument = (): boolean => {
  */
 const SP_REAUTH_HINT = 'Call `microsoft-word_reauthenticate` to recover.';
 
-/** Throw an AUTH_ERROR, appending the reauth hint on SharePoint documents. */
+/** User-facing message when no Graph token is available at all. */
+export const NOT_AUTHENTICATED_MESSAGE = 'Not authenticated — please sign in to Microsoft 365.';
+
+/** User-facing message when Graph rejects the token as expired (401/403). */
+export const AUTH_EXPIRED_MESSAGE = 'Authentication expired — please refresh the page.';
+
+/**
+ * Throw an AUTH_ERROR, appending the reauth hint on SharePoint documents.
+ * Clears the adapter's cached token first so the next call re-reads fresh auth
+ * state — every auth failure path resets the cache through this single helper.
+ */
 export const authError = (msg: string): never => {
+  clearAuthCache('microsoft-word');
   throw ToolError.auth(isSharePointDocument() ? `${msg} ${SP_REAUTH_HINT}` : msg);
 };
 
@@ -223,7 +235,7 @@ export const api = async <T>(
   } = {},
 ): Promise<T> => {
   const token = getToken();
-  if (!token) authError('Not authenticated — please sign in to Microsoft 365.');
+  if (!token) authError(NOT_AUTHENTICATED_MESSAGE);
 
   const qs = options.query ? buildQueryString(options.query) : '';
   const url = qs ? `${GRAPH_API_BASE}${endpoint}?${qs}` : `${GRAPH_API_BASE}${endpoint}`;
@@ -269,7 +281,7 @@ export const api = async <T>(
   }
 
   if (response.status === 401 || response.status === 403) {
-    authError('Authentication expired — please refresh the page.');
+    authError(AUTH_EXPIRED_MESSAGE);
   }
 
   if (response.status === 404) {
