@@ -59,6 +59,7 @@ export const itemDetailSchema = z.object({
   payment_methods: z.array(z.string()).describe('Payment method brands visible on the item page or seller description'),
   shipping: z.string().describe('Shipping cost or "Free"'),
   return_policy: z.string().describe('Return policy text'),
+  watchers: z.string().describe('Watcher count text when visible on the listing page, empty if unavailable'),
 });
 
 export const mapItemDetail = (item: RawItemDetail) => ({
@@ -84,6 +85,7 @@ export const mapItemDetail = (item: RawItemDetail) => ({
   payment_methods: item.paymentMethods,
   shipping: item.shipping,
   return_policy: item.returnPolicy,
+  watchers: item.watchers,
 });
 
 // --- Item store ---
