@@ -350,6 +350,7 @@ export interface RawItemDetail {
   paymentMethods: string[];
   shipping: string;
   returnPolicy: string;
+  watchers: string;
 }
 
 export interface ItemDetailExtras {
@@ -470,6 +471,20 @@ const extractPaymentMethods = (text: string): string[] => {
   return methods.filter(([, pattern]) => pattern.test(text)).map(([method]) => method);
 };
 
+const extractWatcherCount = (text: string): string => {
+  const patterns = [
+    /\b([0-9][0-9,]*)\s+(?:watchers?|people\s+are\s+watching|watching)\b/i,
+    /\bwatchers?\s*[:：]?\s*([0-9][0-9,]*)\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return match[1].replace(/,/g, '');
+  }
+
+  return '';
+};
+
 export const parseItemDetail = (html: string, itemId: string, extras: ItemDetailExtras = {}): RawItemDetail => {
   // Parse JSON-LD Product schema (eBay uses unquoted type attribute)
   const ldJsonRegex = /<script type=application\/ld\+json>([\s\S]*?)<\/script>/g;
@@ -524,6 +539,7 @@ export const parseItemDetail = (html: string, itemId: string, extras: ItemDetail
     sellerDescription.sections.product_information ||
     sellerDescription.text.substring(0, 500);
   const pageText = cleanText(doc.body.textContent ?? '');
+  const watchers = extractWatcherCount(pageText);
   const itemSpecifics = extractLabelValuePairs(doc);
   const shippingSummary = extractDelimitedText(
     pageText,
@@ -577,6 +593,7 @@ export const parseItemDetail = (html: string, itemId: string, extras: ItemDetail
     paymentMethods,
     shipping: shippingCost,
     returnPolicy,
+    watchers,
   };
 };
 
