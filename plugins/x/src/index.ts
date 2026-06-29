@@ -11,8 +11,11 @@ import { getUserTweets } from './tools/get-user-tweets.js';
 import { getTweet } from './tools/get-tweet.js';
 import { createTweet } from './tools/create-tweet.js';
 import { deleteTweet } from './tools/delete-tweet.js';
+import { downloadTweetMedia } from './tools/download-tweet-media.js';
 import { getTweetReplies } from './tools/get-tweet-replies.js';
+import { listTweetMedia } from './tools/list-tweet-media.js';
 import { pinTweet } from './tools/pin-tweet.js';
+import { prepareTweetScreenshot } from './tools/prepare-tweet-screenshot.js';
 
 // Users
 import { getUserProfile } from './tools/get-user-profile.js';
@@ -59,8 +62,11 @@ class XPlugin extends OpenTabsPlugin {
     getTweet,
     createTweet,
     deleteTweet,
+    downloadTweetMedia,
+    listTweetMedia,
     getTweetReplies,
     pinTweet,
+    prepareTweetScreenshot,
     // Users
     getUserProfile,
     getUserById,
