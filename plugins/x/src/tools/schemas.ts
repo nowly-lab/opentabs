@@ -100,6 +100,34 @@ interface RawTweetLegacy {
   in_reply_to_user_id_str?: string;
   conversation_id_str?: string;
   created_at?: string;
+  extended_entities?: RawTweetExtendedEntities;
+  entities?: RawTweetExtendedEntities;
+}
+
+export interface RawTweetMediaVariant {
+  bitrate?: number;
+  content_type?: string;
+  url?: string;
+}
+
+export interface RawTweetMedia {
+  id_str?: string;
+  media_url_https?: string;
+  type?: string;
+  url?: string;
+  display_url?: string;
+  expanded_url?: string;
+  original_info?: {
+    width?: number;
+    height?: number;
+  };
+  video_info?: {
+    variants?: RawTweetMediaVariant[];
+  };
+}
+
+export interface RawTweetExtendedEntities {
+  media?: RawTweetMedia[];
 }
 
 interface RawTweetViews {

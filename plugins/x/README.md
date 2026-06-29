@@ -19,7 +19,7 @@ npm install -g @opentabs-dev/opentabs-plugin-x
 1. Open [x.com](https://x.com) in Chrome and log in
 2. Open the OpenTabs side panel — the X plugin should appear as **ready**
 
-## Tools (31)
+## Tools (34)
 
 ### Timelines (3)
 
@@ -29,7 +29,7 @@ npm install -g @opentabs-dev/opentabs-plugin-x
 | `get_latest_timeline` | Get latest tweets from followed accounts | Read |
 | `get_user_tweets` | Get tweets by a user | Read |
 
-### Tweets (6)
+### Tweets (9)
 
 | Tool | Description | Type |
 |---|---|---|
@@ -37,8 +37,11 @@ npm install -g @opentabs-dev/opentabs-plugin-x
 | `create_tweet` | Post a new tweet | Write |
 | `quote_tweet` | Post a quote tweet | Write |
 | `delete_tweet` | Delete a tweet | Write |
+| `download_tweet_media` | Save tweet images or videos | Read |
 | `get_tweet_replies` | Get replies to a tweet | Read |
+| `list_tweet_media` | List tweet media URLs | Read |
 | `pin_tweet` | Pin a tweet to your profile | Write |
+| `prepare_tweet_screenshot` | Prepare tweet for screenshot | Read |
 
 ### Users (4)
 

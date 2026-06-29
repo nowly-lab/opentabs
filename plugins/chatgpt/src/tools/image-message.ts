@@ -114,13 +114,15 @@ const getComposerText = (composer: Element): string => {
   return composer.textContent ?? '';
 };
 
+const normalizeComposerText = (value: string): string => value.replace(/\s+/g, ' ').trim();
+
 const isResponding = (): boolean => document.querySelector(STOP_BUTTON_SELECTOR) !== null;
 
 const waitForComposerText = async (message: string): Promise<void> => {
   await waitUntil(
     () => {
       const composer = findComposer();
-      return getComposerText(composer).trim() === message.trim();
+      return normalizeComposerText(getComposerText(composer)) === normalizeComposerText(message);
     },
     { interval: 100, timeout: 5000 },
   );
