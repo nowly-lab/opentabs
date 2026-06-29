@@ -31,10 +31,38 @@ export interface ProgressOptions {
   message?: string;
 }
 
+/** Options for fetching text from the extension background context. */
+export interface BackgroundFetchTextOptions {
+  /** Optional request headers. Unsafe headers are filtered by the browser. */
+  headers?: Record<string, string>;
+  /** Request timeout in milliseconds. Defaults to the platform timeout. */
+  timeoutMs?: number;
+  /** Maximum response text length to return. Defaults to the platform cap. */
+  maxLength?: number;
+}
+
 /** Context object injected into tool handlers at runtime by the adapter. */
 export interface ToolHandlerContext {
   /** Report incremental progress during a long-running operation. Fire-and-forget. */
   reportProgress(opts: ProgressOptions): void;
+  /**
+   * Capture the current tab's visible viewport as a PNG screenshot.
+   * Runs through the extension background context because page-context tools
+   * cannot call Chrome tab capture APIs directly.
+   */
+  captureVisibleTabScreenshot?(): Promise<string>;
+  /**
+   * Start a browser download from a base64 payload using Chrome's downloads API.
+   * Unlike page-context anchor downloads, this preserves relative directory
+   * paths in the filename.
+   */
+  downloadBase64File?(base64: string, filename: string, mimeType?: string): Promise<{ downloadId: number }>;
+  /**
+   * Fetch response text from the extension background context.
+   * Useful when a page exposes data in a cross-origin subresource that the
+   * page context cannot read because of browser CORS enforcement.
+   */
+  fetchTextFromBackground?(url: string, opts?: BackgroundFetchTextOptions): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------

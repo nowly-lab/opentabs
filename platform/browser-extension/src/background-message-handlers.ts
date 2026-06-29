@@ -32,7 +32,12 @@ import {
   notifyAffectedPlugins,
   stopReadinessPoll,
 } from './tab-state.js';
-import { notifyDispatchProgress } from './tool-dispatch.js';
+import {
+  isBackgroundFetchDispatchActive,
+  isDownloadBase64DispatchActive,
+  isScreenshotCaptureDispatchActive,
+  notifyDispatchProgress,
+} from './tool-dispatch.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket connection state
@@ -88,6 +93,24 @@ const persistWsConnected = (connected: boolean): void => {
 
 /** Handler signature for background message dispatch */
 type MessageHandler = (message: Record<string, unknown>, sendResponse: (response: unknown) => void) => void;
+
+const DEFAULT_BACKGROUND_FETCH_TIMEOUT_MS = 20_000;
+const MAX_BACKGROUND_FETCH_TIMEOUT_MS = 60_000;
+const DEFAULT_BACKGROUND_FETCH_MAX_LENGTH = 256_000;
+const MAX_BACKGROUND_FETCH_MAX_LENGTH = 1_000_000;
+
+const sanitizeBackgroundFetchHeaders = (headers: unknown): Record<string, string> => {
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return {};
+
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    const normalizedKey = key.toLowerCase();
+    if (['authorization', 'cookie', 'proxy-authorization'].includes(normalizedKey)) continue;
+    result[key] = value;
+  }
+  return result;
+};
 
 /** Handle offscreen:getUrl — return the WebSocket URL and connectionId for the offscreen document */
 const handleOffscreenGetUrl: MessageHandler = (_message, sendResponse) => {
@@ -332,6 +355,143 @@ const handleToolProgress: MessageHandler = (message, sendResponse) => {
     notifyDispatchProgress(dispatchId);
   }
   sendResponse({ ok: true });
+};
+
+/**
+ * Handle tool:backgroundFetchText — fetch text in the extension background
+ * context for a currently running tool dispatch. This is intentionally narrow:
+ * only http(s), GET, bounded timeout, bounded response text.
+ */
+const handleToolBackgroundFetchText: MessageHandler = (message, sendResponse) => {
+  const dispatchId = message.dispatchId;
+  const rawUrl = message.url;
+  if (typeof dispatchId !== 'string' || !isBackgroundFetchDispatchActive(dispatchId)) {
+    sendResponse({ ok: false, error: 'Background fetch is not active for this dispatch' });
+    return;
+  }
+  if (typeof rawUrl !== 'string') {
+    sendResponse({ ok: false, error: 'Invalid fetch URL' });
+    return;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    sendResponse({ ok: false, error: 'Invalid fetch URL' });
+    return;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    sendResponse({ ok: false, error: 'Only http(s) URLs can be fetched' });
+    return;
+  }
+
+  const requestedTimeout =
+    typeof message.timeoutMs === 'number' ? message.timeoutMs : DEFAULT_BACKGROUND_FETCH_TIMEOUT_MS;
+  const timeoutMs = Math.min(Math.max(requestedTimeout, 1_000), MAX_BACKGROUND_FETCH_TIMEOUT_MS);
+  const requestedMaxLength =
+    typeof message.maxLength === 'number' ? message.maxLength : DEFAULT_BACKGROUND_FETCH_MAX_LENGTH;
+  const maxLength = Math.min(Math.max(requestedMaxLength, 1_000), MAX_BACKGROUND_FETCH_MAX_LENGTH);
+
+  (async () => {
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        Accept: 'text/html,text/plain,*/*',
+        ...sanitizeBackgroundFetchHeaders(message.headers),
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await response.text();
+    sendResponse({
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      text: text.length > maxLength ? text.slice(0, maxLength) : text,
+      truncated: text.length > maxLength,
+      error: response.ok ? undefined : `Fetch failed with HTTP ${response.status}`,
+    });
+  })().catch((err: unknown) => {
+    sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  });
+};
+
+/**
+ * Handle tool:captureVisibleTabScreenshot — capture the current tab during
+ * an active tool dispatch. Kept dispatch-scoped so page scripts cannot use the
+ * bridge outside an explicit tool invocation.
+ */
+const handleToolCaptureVisibleTabScreenshot: MessageHandler = (message, sendResponse) => {
+  const dispatchId = message.dispatchId;
+  const tabId = message.tabId;
+  if (typeof dispatchId !== 'string' || !isScreenshotCaptureDispatchActive(dispatchId)) {
+    sendResponse({ ok: false, error: 'Screenshot capture is not active for this dispatch' });
+    return;
+  }
+  if (typeof tabId !== 'number' || !Number.isInteger(tabId) || tabId <= 0) {
+    sendResponse({ ok: false, error: 'Invalid tab ID' });
+    return;
+  }
+
+  (async () => {
+    const tab = await chrome.tabs.update(tabId, { active: true });
+    if (!tab || typeof tab.windowId !== 'number') {
+      sendResponse({ ok: false, error: `Tab ${tabId} not found` });
+      return;
+    }
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+    sendResponse({ ok: true, image: dataUrl.replace(/^data:image\/png;base64,/, '') });
+  })().catch((err: unknown) => {
+    sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  });
+};
+
+const isSafeDownloadFilename = (filename: string): boolean => {
+  if (!filename || filename.startsWith('/') || filename.startsWith('\\') || /^[a-zA-Z]:[\\/]/.test(filename)) {
+    return false;
+  }
+  return filename
+    .split(/[\\/]+/)
+    .every(part => part.length > 0 && part !== '.' && part !== '..' && !part.includes('\0'));
+};
+
+/**
+ * Handle tool:downloadBase64File — create a browser download during an active
+ * tool dispatch. chrome.downloads preserves relative directories in filename.
+ */
+const handleToolDownloadBase64File: MessageHandler = (message, sendResponse) => {
+  const dispatchId = message.dispatchId;
+  if (typeof dispatchId !== 'string' || !isDownloadBase64DispatchActive(dispatchId)) {
+    sendResponse({ ok: false, error: 'Download is not active for this dispatch' });
+    return;
+  }
+
+  const base64 = message.base64;
+  const filename = message.filename;
+  const mimeType =
+    typeof message.mimeType === 'string' && message.mimeType.length > 0 ? message.mimeType : 'application/octet-stream';
+  if (typeof base64 !== 'string' || base64.length === 0) {
+    sendResponse({ ok: false, error: 'Missing or invalid base64 payload' });
+    return;
+  }
+  if (typeof filename !== 'string' || !isSafeDownloadFilename(filename)) {
+    sendResponse({ ok: false, error: 'Missing or unsafe download filename' });
+    return;
+  }
+
+  (async () => {
+    const downloadId = await chrome.downloads.download({
+      url: `data:${mimeType};base64,${base64}`,
+      filename,
+      saveAs: false,
+    });
+    sendResponse({ ok: true, downloadId });
+  })().catch((err: unknown) => {
+    sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  });
 };
 
 /**
@@ -778,6 +938,9 @@ const backgroundHandlers = new Map<InternalMessage['type'], MessageHandler>([
   ['plugin:logs', handlePluginLogs],
   ['plugin:readinessChanged', handlePluginReadinessChanged],
   ['tool:progress', handleToolProgress],
+  ['tool:backgroundFetchText', handleToolBackgroundFetchText],
+  ['tool:captureVisibleTabScreenshot', handleToolCaptureVisibleTabScreenshot],
+  ['tool:downloadBase64File', handleToolDownloadBase64File],
   ['sp:confirmationResponse', handleSpConfirmationResponse],
   ['port-changed', handlePortChanged],
 ]);
@@ -857,6 +1020,8 @@ export {
   handlePluginReadinessChanged,
   handlePortChanged,
   handleSpConfirmationResponse,
+  handleToolBackgroundFetchText,
+  handleToolDownloadBase64File,
   handleToolProgress,
   handleWsMessage,
   handleWsState,

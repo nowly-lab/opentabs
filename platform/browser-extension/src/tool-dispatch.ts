@@ -13,6 +13,9 @@ import { sendToServer } from './messaging.js';
  * script timeout for the corresponding dispatch.
  */
 const progressCallbacks = new Map<string, () => void>();
+const activeBackgroundFetchDispatches = new Set<string>();
+const activeScreenshotCaptureDispatches = new Set<string>();
+const activeDownloadBase64Dispatches = new Set<string>();
 
 /**
  * Notify the extension-side dispatch that a progress event arrived.
@@ -22,6 +25,14 @@ const notifyDispatchProgress = (dispatchId: string): void => {
   const cb = progressCallbacks.get(dispatchId);
   if (cb) cb();
 };
+
+const isBackgroundFetchDispatchActive = (dispatchId: string): boolean =>
+  activeBackgroundFetchDispatches.has(dispatchId);
+
+const isScreenshotCaptureDispatchActive = (dispatchId: string): boolean =>
+  activeScreenshotCaptureDispatches.has(dispatchId);
+
+const isDownloadBase64DispatchActive = (dispatchId: string): boolean => activeDownloadBase64Dispatches.has(dispatchId);
 
 /**
  * Get the link for console.warn logging: filesystem path for local plugins,
@@ -128,12 +139,249 @@ const removeProgressListener = (tabId: number, dispatchId: string): void => {
 };
 
 /**
+ * Inject an ISOLATED world request/response bridge for background text fetches.
+ * The MAIN world tool context cannot call chrome.runtime directly, so requests
+ * cross worlds through dispatch-scoped DOM CustomEvents.
+ */
+const injectBackgroundFetchListener = async (tabId: number, dispatchId: string): Promise<void> => {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: (dId: string) => {
+        const requestEventName = `opentabs:backgroundFetchText:${dId}`;
+        const responseEventName = `opentabs:backgroundFetchTextResult:${dId}`;
+        const handler = (e: Event) => {
+          const detail = (e as CustomEvent).detail as {
+            requestId: string;
+            url: string;
+            headers?: Record<string, string>;
+            timeoutMs?: number;
+            maxLength?: number;
+          } | null;
+          if (!detail || typeof detail.requestId !== 'string' || typeof detail.url !== 'string') return;
+
+          chrome.runtime
+            .sendMessage({
+              type: 'tool:backgroundFetchText',
+              dispatchId: dId,
+              url: detail.url,
+              headers: detail.headers,
+              timeoutMs: detail.timeoutMs,
+              maxLength: detail.maxLength,
+            })
+            .then((response: unknown) => {
+              document.dispatchEvent(
+                new CustomEvent(responseEventName, {
+                  detail: { requestId: detail.requestId, response },
+                }),
+              );
+            })
+            .catch((err: unknown) => {
+              document.dispatchEvent(
+                new CustomEvent(responseEventName, {
+                  detail: {
+                    requestId: detail.requestId,
+                    response: { ok: false, error: err instanceof Error ? err.message : String(err) },
+                  },
+                }),
+              );
+            });
+        };
+        document.addEventListener(requestEventName, handler);
+
+        const cleanupKey = `__opentabs_background_fetch_cleanup_${dId}`;
+        const doc = document as unknown as Record<string, unknown>;
+        doc[cleanupKey] = () => {
+          document.removeEventListener(requestEventName, handler);
+          doc[cleanupKey] = undefined;
+        };
+      },
+      args: [dispatchId],
+    });
+  } catch {
+    // Tab may not be injectable — tools can fall back to page-context fetches
+  }
+};
+
+const removeBackgroundFetchListener = (tabId: number, dispatchId: string): void => {
+  chrome.scripting
+    .executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: (dId: string) => {
+        const cleanupKey = `__opentabs_background_fetch_cleanup_${dId}`;
+        const cleanup = (document as unknown as Record<string, unknown>)[cleanupKey] as (() => void) | undefined;
+        if (cleanup) cleanup();
+      },
+      args: [dispatchId],
+    })
+    .catch(() => {
+      // Best-effort cleanup
+    });
+};
+
+/**
+ * Inject an ISOLATED world request/response bridge for tab screenshots.
+ * Page-context tools cannot call Chrome tab capture APIs directly.
+ */
+const injectScreenshotCaptureListener = async (tabId: number, dispatchId: string): Promise<void> => {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: (dId: string, tId: number) => {
+        const requestEventName = `opentabs:captureVisibleTabScreenshot:${dId}`;
+        const responseEventName = `opentabs:captureVisibleTabScreenshotResult:${dId}`;
+        const handler = (e: Event) => {
+          const detail = (e as CustomEvent).detail as { requestId: string } | null;
+          if (!detail || typeof detail.requestId !== 'string') return;
+
+          chrome.runtime
+            .sendMessage({
+              type: 'tool:captureVisibleTabScreenshot',
+              dispatchId: dId,
+              tabId: tId,
+            })
+            .then((response: unknown) => {
+              document.dispatchEvent(
+                new CustomEvent(responseEventName, {
+                  detail: { requestId: detail.requestId, response },
+                }),
+              );
+            })
+            .catch((err: unknown) => {
+              document.dispatchEvent(
+                new CustomEvent(responseEventName, {
+                  detail: {
+                    requestId: detail.requestId,
+                    response: { ok: false, error: err instanceof Error ? err.message : String(err) },
+                  },
+                }),
+              );
+            });
+        };
+        document.addEventListener(requestEventName, handler);
+
+        const cleanupKey = `__opentabs_screenshot_capture_cleanup_${dId}`;
+        const doc = document as unknown as Record<string, unknown>;
+        doc[cleanupKey] = () => {
+          document.removeEventListener(requestEventName, handler);
+          doc[cleanupKey] = undefined;
+        };
+      },
+      args: [dispatchId, tabId],
+    });
+  } catch {
+    // Tab may not be injectable — screenshot capture will fail from the tool context
+  }
+};
+
+const removeScreenshotCaptureListener = (tabId: number, dispatchId: string): void => {
+  chrome.scripting
+    .executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: (dId: string) => {
+        const cleanupKey = `__opentabs_screenshot_capture_cleanup_${dId}`;
+        const cleanup = (document as unknown as Record<string, unknown>)[cleanupKey] as (() => void) | undefined;
+        if (cleanup) cleanup();
+      },
+      args: [dispatchId],
+    })
+    .catch(() => {
+      // Best-effort cleanup
+    });
+};
+
+/**
+ * Inject an ISOLATED world request/response bridge for downloads.
+ * Page-context anchor downloads flatten path separators, so tools that need
+ * directories must use the extension background downloads API.
+ */
+const injectDownloadBase64Listener = async (tabId: number, dispatchId: string): Promise<void> => {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: (dId: string) => {
+        const requestEventName = `opentabs:downloadBase64File:${dId}`;
+        const responseEventName = `opentabs:downloadBase64FileResult:${dId}`;
+        const handler = (e: Event) => {
+          const detail = (e as CustomEvent).detail as {
+            requestId: string;
+            base64: string;
+            filename: string;
+            mimeType?: string;
+          } | null;
+          if (!detail || typeof detail.requestId !== 'string') return;
+
+          chrome.runtime
+            .sendMessage({
+              type: 'tool:downloadBase64File',
+              dispatchId: dId,
+              base64: detail.base64,
+              filename: detail.filename,
+              mimeType: detail.mimeType,
+            })
+            .then((response: unknown) => {
+              document.dispatchEvent(
+                new CustomEvent(responseEventName, {
+                  detail: { requestId: detail.requestId, response },
+                }),
+              );
+            })
+            .catch((err: unknown) => {
+              document.dispatchEvent(
+                new CustomEvent(responseEventName, {
+                  detail: {
+                    requestId: detail.requestId,
+                    response: { ok: false, error: err instanceof Error ? err.message : String(err) },
+                  },
+                }),
+              );
+            });
+        };
+        document.addEventListener(requestEventName, handler);
+
+        const cleanupKey = `__opentabs_download_base64_cleanup_${dId}`;
+        const doc = document as unknown as Record<string, unknown>;
+        doc[cleanupKey] = () => {
+          document.removeEventListener(requestEventName, handler);
+          doc[cleanupKey] = undefined;
+        };
+      },
+      args: [dispatchId],
+    });
+  } catch {
+    // Tab may not be injectable — download requests will fail from the tool context
+  }
+};
+
+const removeDownloadBase64Listener = (tabId: number, dispatchId: string): void => {
+  chrome.scripting
+    .executeScript({
+      target: { tabId },
+      world: 'ISOLATED',
+      func: (dId: string) => {
+        const cleanupKey = `__opentabs_download_base64_cleanup_${dId}`;
+        const cleanup = (document as unknown as Record<string, unknown>)[cleanupKey] as (() => void) | undefined;
+        if (cleanup) cleanup();
+      },
+      args: [dispatchId],
+    })
+    .catch(() => {
+      // Best-effort cleanup
+    });
+};
+
+/**
  * Execute a tool on a specific tab. Returns the structured result from the
  * adapter script, or throws if the tab is inaccessible (e.g., closed).
  *
- * The extension-side timeout starts at SCRIPT_TIMEOUT_MS (25s). When the tool
+ * The extension-side timeout starts at SCRIPT_TIMEOUT_MS. When the tool
  * reports progress, the timeout is reset via the progressCallbacks registry.
- * The absolute upper bound is MAX_SCRIPT_TIMEOUT_MS (295s).
+ * The absolute upper bound is MAX_SCRIPT_TIMEOUT_MS.
  *
  * @param dispatchId - Correlation ID for progress reporting. The injected MAIN
  *   world function creates a ToolHandlerContext with a reportProgress callback
@@ -149,6 +397,10 @@ const executeToolOnTab = async (
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const startTs = Date.now();
 
+  activeBackgroundFetchDispatches.add(dispatchId);
+  activeScreenshotCaptureDispatches.add(dispatchId);
+  activeDownloadBase64Dispatches.add(dispatchId);
+
   const scriptPromise = chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
@@ -163,7 +415,19 @@ const executeToolOnTab = async (
                   name: string;
                   handle(
                     params: unknown,
-                    context?: { reportProgress(opts: { progress: number; total: number; message?: string }): void },
+                    context?: {
+                      reportProgress(opts: { progress: number; total: number; message?: string }): void;
+                      captureVisibleTabScreenshot(): Promise<string>;
+                      downloadBase64File(
+                        base64: string,
+                        filename: string,
+                        mimeType?: string,
+                      ): Promise<{ downloadId: number }>;
+                      fetchTextFromBackground(
+                        url: string,
+                        opts?: { headers?: Record<string, string>; timeoutMs?: number; maxLength?: number },
+                      ): Promise<string>;
+                    },
                   ): Promise<unknown>;
                 }>;
               }
@@ -235,6 +499,134 @@ const executeToolOnTab = async (
             // Fire-and-forget — progress reporting errors must not affect tool execution
           }
         },
+        fetchTextFromBackground(
+          url: string,
+          opts: { headers?: Record<string, string>; timeoutMs?: number; maxLength?: number } = {},
+        ): Promise<string> {
+          const requestId =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`;
+          const requestEventName = `opentabs:backgroundFetchText:${dId}`;
+          const responseEventName = `opentabs:backgroundFetchTextResult:${dId}`;
+          const timeoutMs = opts.timeoutMs ?? 20_000;
+
+          return new Promise((resolve, reject) => {
+            const timeoutId = window.setTimeout(() => {
+              document.removeEventListener(responseEventName, responseHandler);
+              reject(new Error(`Background fetch timed out after ${timeoutMs}ms`));
+            }, timeoutMs + 1_000);
+
+            const responseHandler = (e: Event) => {
+              const detail = (e as CustomEvent).detail as {
+                requestId?: string;
+                response?: { ok?: boolean; text?: string; error?: string; status?: number };
+              } | null;
+              if (detail?.requestId !== requestId) return;
+              window.clearTimeout(timeoutId);
+              document.removeEventListener(responseEventName, responseHandler);
+
+              const response = detail.response;
+              if (response?.ok && typeof response.text === 'string') {
+                resolve(response.text);
+                return;
+              }
+              const status = typeof response?.status === 'number' ? ` (HTTP ${response.status})` : '';
+              reject(new Error(`${response?.error ?? 'Background fetch failed'}${status}`));
+            };
+
+            document.addEventListener(responseEventName, responseHandler);
+            document.dispatchEvent(
+              new CustomEvent(requestEventName, {
+                detail: {
+                  requestId,
+                  url,
+                  headers: opts.headers,
+                  timeoutMs,
+                  maxLength: opts.maxLength,
+                },
+              }),
+            );
+          });
+        },
+        captureVisibleTabScreenshot(): Promise<string> {
+          const requestId =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`;
+          const requestEventName = `opentabs:captureVisibleTabScreenshot:${dId}`;
+          const responseEventName = `opentabs:captureVisibleTabScreenshotResult:${dId}`;
+          const timeoutMs = 20_000;
+
+          return new Promise((resolve, reject) => {
+            const timeoutId = window.setTimeout(() => {
+              document.removeEventListener(responseEventName, responseHandler);
+              reject(new Error(`Screenshot capture timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
+
+            const responseHandler = (e: Event) => {
+              const detail = (e as CustomEvent).detail as {
+                requestId?: string;
+                response?: { ok?: boolean; image?: string; error?: string };
+              } | null;
+              if (detail?.requestId !== requestId) return;
+              window.clearTimeout(timeoutId);
+              document.removeEventListener(responseEventName, responseHandler);
+
+              const response = detail.response;
+              if (response?.ok && typeof response.image === 'string') {
+                resolve(response.image);
+                return;
+              }
+              reject(new Error(response?.error ?? 'Screenshot capture failed'));
+            };
+
+            document.addEventListener(responseEventName, responseHandler);
+            document.dispatchEvent(new CustomEvent(requestEventName, { detail: { requestId } }));
+          });
+        },
+        downloadBase64File(
+          base64: string,
+          filename: string,
+          mimeType = 'application/octet-stream',
+        ): Promise<{ downloadId: number }> {
+          const requestId =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `${Date.now()}-${Math.random()}`;
+          const requestEventName = `opentabs:downloadBase64File:${dId}`;
+          const responseEventName = `opentabs:downloadBase64FileResult:${dId}`;
+          const timeoutMs = 20_000;
+
+          return new Promise((resolve, reject) => {
+            const timeoutId = window.setTimeout(() => {
+              document.removeEventListener(responseEventName, responseHandler);
+              reject(new Error(`Download timed out after ${timeoutMs}ms`));
+            }, timeoutMs);
+
+            const responseHandler = (e: Event) => {
+              const detail = (e as CustomEvent).detail as {
+                requestId?: string;
+                response?: { ok?: boolean; downloadId?: number; error?: string };
+              } | null;
+              if (detail?.requestId !== requestId) return;
+              window.clearTimeout(timeoutId);
+              document.removeEventListener(responseEventName, responseHandler);
+
+              const response = detail.response;
+              if (response?.ok && typeof response.downloadId === 'number') {
+                resolve({ downloadId: response.downloadId });
+                return;
+              }
+              reject(new Error(response?.error ?? 'Download failed'));
+            };
+
+            document.addEventListener(responseEventName, responseHandler);
+            document.dispatchEvent(
+              new CustomEvent(requestEventName, { detail: { requestId, base64, filename, mimeType } }),
+            );
+          });
+        },
       };
 
       try {
@@ -298,13 +690,15 @@ const executeToolOnTab = async (
       timeoutReject?.(new Error(`Script execution timed out after ${SCRIPT_TIMEOUT_MS}ms`));
     }, nextTimeout);
   });
-
   let results: Awaited<typeof scriptPromise>;
   try {
     results = await Promise.race([scriptPromise, timeoutPromise]);
   } finally {
     clearTimeout(timeoutId);
     progressCallbacks.delete(dispatchId);
+    activeBackgroundFetchDispatches.delete(dispatchId);
+    activeScreenshotCaptureDispatches.delete(dispatchId);
+    activeDownloadBase64Dispatches.delete(dispatchId);
   }
 
   const firstResult = results[0] as { result?: unknown } | undefined;
@@ -382,10 +776,16 @@ const handleToolDispatch = async (params: Record<string, unknown>, id: string | 
   const executeOnTab = async (tid: number): Promise<DispatchResult> => {
     await injectToolInvocationLog(tid, pluginName, toolName, link);
     await injectProgressListener(tid, dispatchId);
+    await injectBackgroundFetchListener(tid, dispatchId);
+    await injectScreenshotCaptureListener(tid, dispatchId);
+    await injectDownloadBase64Listener(tid, dispatchId);
     try {
       return await executeToolOnTab(tid, pluginName, toolName, input, dispatchId);
     } finally {
       removeProgressListener(tid, dispatchId);
+      removeBackgroundFetchListener(tid, dispatchId);
+      removeScreenshotCaptureListener(tid, dispatchId);
+      removeDownloadBase64Listener(tid, dispatchId);
     }
   };
 
@@ -409,4 +809,11 @@ const handleToolDispatch = async (params: Record<string, unknown>, id: string | 
   }
 };
 
-export { getPluginLink, handleToolDispatch, notifyDispatchProgress };
+export {
+  getPluginLink,
+  handleToolDispatch,
+  isBackgroundFetchDispatchActive,
+  isDownloadBase64DispatchActive,
+  isScreenshotCaptureDispatchActive,
+  notifyDispatchProgress,
+};

@@ -48,10 +48,10 @@ export const freezeRegistryMap = <K, V>(map: Map<K, V>): ReadonlyMap<K, V> => {
 };
 
 /** Timeout for tool dispatch and browser command requests (ms) */
-export const DISPATCH_TIMEOUT_MS = 30_000;
+export const DISPATCH_TIMEOUT_MS = 600_000;
 
-/** Absolute upper bound for a single dispatch, even with continuous progress (5 minutes) */
-export const MAX_DISPATCH_TIMEOUT_MS = 300_000;
+/** Absolute upper bound for a single dispatch, even with continuous progress (30 minutes) */
+export const MAX_DISPATCH_TIMEOUT_MS = 1_800_000;
 
 /** Active file watcher entry for a single plugin directory */
 export interface FileWatcherEntry {
