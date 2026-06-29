@@ -196,7 +196,7 @@ const handleToolCall = async (
       method: 'POST',
       headers,
       body: JSON.stringify({ arguments: args }),
-      signal: AbortSignal.timeout(300_000),
+      signal: AbortSignal.timeout(1_800_000),
     });
   } catch (err: unknown) {
     if (isConnectionRefused(err)) {

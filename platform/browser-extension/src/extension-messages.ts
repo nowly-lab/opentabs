@@ -112,6 +112,32 @@ export interface ToolProgressMessage {
   message?: string;
 }
 
+/** Content script relay → Background: fetch text for a running tool dispatch */
+export interface ToolBackgroundFetchTextMessage {
+  type: 'tool:backgroundFetchText';
+  dispatchId: string;
+  url: string;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  maxLength?: number;
+}
+
+/** Content script relay → Background: capture the current tab during a running tool dispatch */
+export interface ToolCaptureVisibleTabScreenshotMessage {
+  type: 'tool:captureVisibleTabScreenshot';
+  dispatchId: string;
+  tabId: number;
+}
+
+/** Content script relay → Background: download base64 content during a running tool dispatch */
+export interface ToolDownloadBase64FileMessage {
+  type: 'tool:downloadBase64File';
+  dispatchId: string;
+  base64: string;
+  filename: string;
+  mimeType?: string;
+}
+
 /** Side panel → Background: confirmation response from user */
 export interface SpConfirmationResponseMessage {
   type: 'sp:confirmationResponse';
@@ -239,6 +265,9 @@ export type InternalMessage =
   | PluginLogsMessage
   | PluginReadinessChangedMessage
   | ToolProgressMessage
+  | ToolBackgroundFetchTextMessage
+  | ToolCaptureVisibleTabScreenshotMessage
+  | ToolDownloadBase64FileMessage
   | SpGetStateMessage
   | SpConnectionStateMessage
   | SpRelayMessage

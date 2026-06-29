@@ -7,23 +7,20 @@ export const SIDE_PANEL_OPEN_WINDOWS_KEY = 'sidePanelOpenWindows';
 /**
  * Default timeout for chrome.scripting.executeScript calls (ms).
  *
- * Set to 25 seconds — 5 seconds less than the MCP server's DISPATCH_TIMEOUT_MS
- * (30 seconds in platform/mcp-server/src/state.ts). This guarantees the extension
- * sends a response (success or timeout error) before the server gives up and
- * discards the pending dispatch, preventing orphaned script executions whose
- * results are silently dropped.
+ * Set higher than the historical 25-second default so long-running page tools
+ * can finish even when their page context cannot reliably emit progress events.
  *
  * For tools that report progress, this timeout is reset on each progress event
  * (see tool-dispatch.ts). The absolute upper bound is MAX_SCRIPT_TIMEOUT_MS.
  */
-export const SCRIPT_TIMEOUT_MS = 25_000;
+export const SCRIPT_TIMEOUT_MS = 600_000;
 /**
  * Absolute maximum timeout for progress-reporting tools (ms).
  *
- * Matches MAX_DISPATCH_TIMEOUT_MS on the MCP server (5 minutes) minus a 5-second
+ * Matches MAX_DISPATCH_TIMEOUT_MS on the MCP server (30 minutes) minus a 5-second
  * safety margin, ensuring the extension always responds before the server gives up.
  */
-export const MAX_SCRIPT_TIMEOUT_MS = 295_000;
+export const MAX_SCRIPT_TIMEOUT_MS = 1_795_000;
 /**
  * Timeout for isReady() probes during tab state computation (ms).
  *

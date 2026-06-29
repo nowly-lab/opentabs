@@ -335,7 +335,7 @@ const runBridge = async (port: number, secret: string, log: LogFn): Promise<void
           method: 'POST',
           headers: baseHeaders(),
           body: JSON.stringify(parsed),
-          signal: AbortSignal.timeout(300_000),
+          signal: AbortSignal.timeout(1_800_000),
         });
 
         // Capture session ID from the initialize response
