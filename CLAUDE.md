@@ -78,8 +78,7 @@ opentabs/
 │   └── create-plugin/             # Plugin scaffolding CLI
 ├── plugins/                       # Example plugins (fully standalone, NOT in npm workspaces)
 ├── e2e/                           # Playwright E2E tests
-├── docs/                          # Documentation site (Next.js)
-└── .ralph/                        # Parallel task daemon
+└── docs/                          # Documentation site (Next.js)
 ```
 
 Each subdirectory has its own `CLAUDE.md` with package-specific details.
@@ -251,37 +250,6 @@ Key files:
 | `~/.opentabs/webhook/start.sh`   | Startup: launches webhook + tunnel + registers GitHub hooks |
 | `~/.opentabs/webhook/ctl.sh`     | Control script (`start`/`stop`/`restart`/`status`/`logs`)   |
 
-### Ralph Infrastructure on Remote Server (`ssh pc`)
-
-A remote Linux server (`ssh pc`) runs two systemd services that automate branch merging and parallel task execution:
-
-**Ralph Consumer** (`ralph-consumer.service`): A daemon that picks up PRD (product requirement document) files from a queue and dispatches them to AI workers. Each worker runs Claude Code in a dedicated worktree to execute the PRD's user stories. Workers push completed work to `ralph-*` branches on the remote.
-
-**Ralph Consolidator** (`ralph-consolidator.service`): A daemon that polls for `ralph-*` branches, merges them into `main`, runs the build + tests, and pushes. If the merge produces build failures, it invokes Claude to fix them automatically. If a push is rejected (non-fast-forward), it rebases and retries up to 3 times.
-
-Key paths on the remote:
-
-| Path | Purpose |
-| --- | --- |
-| `~/.ralph-consumer/` | Consumer state: `queue/`, `worktrees/`, `logs/`, config |
-| `~/.ralph-consolidator/` | Consolidator state: `code/` (work repo), `logs/`, `conflicts/` |
-
-Service management:
-
-```bash
-ssh pc "sudo systemctl stop ralph-consolidator"     # Stop the consolidator
-ssh pc "sudo systemctl start ralph-consolidator"    # Start the consolidator
-ssh pc "sudo systemctl stop ralph-consumer"         # Stop the consumer
-ssh pc "sudo systemctl start ralph-consumer"        # Start the consumer
-ssh pc "systemctl is-active ralph-consolidator"     # Check status
-ssh pc "tail -30 ~/.ralph-consolidator/logs/latest.log"  # View consolidator logs
-ssh pc "tail -30 ~/.ralph-consumer/logs/latest.log"      # View consumer logs
-```
-
-**When to stop the consolidator**: If you need to push multiple commits to `main` without the consolidator racing you, stop it first (`sudo systemctl stop ralph-consolidator`), push your changes, then restart it. The consolidator rebases and retries, but if you're pushing frequently it can get stuck in a rebase-retry loop.
-
-**When to check logs**: If expected branch merges aren't appearing on `main`, check the consolidator logs. Common issues: push race conditions (non-fast-forward), build failures after merge (SDK changes breaking plugins), and plugin dependency mismatches after rebasing.
-
 ---
 
 ## Git Identity
@@ -335,7 +303,7 @@ The pre-commit hook auto-stages any dirty `package-lock.json` file whose sibling
 
 ### Concurrent AI Work
 
-Multiple AI agents (ralph workers, perfect scripts, other Claude sessions) may be running simultaneously. Unstaged changes in the working directory may belong to another agent's in-progress work.
+Multiple AI agents (perfect scripts, other Claude sessions) may be running simultaneously. Unstaged changes in the working directory may belong to another agent's in-progress work.
 
 **Never discard, reset, or checkout over unstaged changes without explicit user permission.** If unstaged changes block an operation (e.g., `git pull` refuses to rebase), ask the user how to proceed — do not run `git checkout -- .`, `git restore .`, or `git reset --hard`. The correct default is to stash (`git stash`) and remind the user to pop it later, but even stashing should be confirmed first when the changes look like they belong to another process.
 
