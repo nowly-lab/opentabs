@@ -1,0 +1,60 @@
+{
+  "name": "@opentabs-dev/opentabs-plugin-amazon-manga",
+  "description": "Save the currently visible Amazon manga reader page as a screenshot",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/adapter.iife.js",
+  "keywords": [
+    "opentabs-plugin"
+  ],
+  "opentabs": {
+    "displayName": "Amazon Manga",
+    "description": "Save the currently visible Amazon manga reader page as a screenshot",
+    "urlPatterns": [
+      "*://read.amazon.co.jp/*",
+      "*://*.read.amazon.co.jp/*"
+    ],
+    "homepage": "https://read.amazon.co.jp",
+    "iconSvg": "<svg viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"4\" y=\"3\" width=\"16\" height=\"18\" rx=\"2\" fill=\"black\"/><path d=\"M8 7h8M8 11h8M8 15h5\" stroke=\"white\" stroke-width=\"1.6\" stroke-linecap=\"round\"/></svg>",
+    "iconDarkSvg": "<svg viewBox=\"0 0 24 24\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"4\" y=\"3\" width=\"16\" height=\"18\" rx=\"2\" fill=\"white\"/><path d=\"M8 7h8M8 11h8M8 15h5\" stroke=\"black\" stroke-width=\"1.6\" stroke-linecap=\"round\"/></svg>"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && opentabs-plugin build",
+    "dev": "tsc --watch --preserveWatchOutput & opentabs-plugin build --watch",
+    "type-check": "tsc --noEmit",
+    "lint": "biome lint src/",
+    "lint:fix": "biome lint --fix src/",
+    "format:check": "biome format src/",
+    "format": "biome format --write src/",
+    "check": "npm run build && npm run type-check && npm run lint && npm run format:check"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  },
+  "dependencies": {
+    "@opentabs-dev/plugin-sdk": "^0.0.111"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.6",
+    "@opentabs-dev/plugin-tools": "^0.0.111",
+    "jiti": "^2.6.1",
+    "typescript": "^6.0.3",
+    "zod": "^4.3.6"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/opentabs-dev/opentabs.git",
+    "directory": "plugins/amazon-manga"
+  }
+}

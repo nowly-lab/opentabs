@@ -460,6 +460,7 @@ const handleToolCall = async (
   req: Request,
   url: URL,
   state: ServerState,
+  server: ServerAdapter,
   sessionServers: McpServerInstance[],
 ): Promise<Response> => {
   const authError = checkBearerAuth(req, state.wsSecret);
@@ -467,6 +468,9 @@ const handleToolCall = async (
   if (!checkEndpointRateLimit(state, '/tools/call', 30)) {
     return new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '60' } });
   }
+  // Long-running plugin tools stream progress through the extension, not this
+  // HTTP response. Disable the socket idle timeout so the CLI can wait.
+  server.timeout(req, 0);
 
   // Extract tool name from URL: /tools/<name>/call
   const match = url.pathname.match(/^\/tools\/([^/]+)\/call$/);
@@ -476,9 +480,10 @@ const handleToolCall = async (
   const body = (await req.json().catch(() => null)) as { arguments?: Record<string, unknown> } | null;
   const args = body?.arguments ?? {};
 
-  // Minimal RequestHandlerExtra for HTTP context (no MCP progress support)
+  // Minimal RequestHandlerExtra for HTTP context. Long-running plugin tools can
+  // still keep the dispatch alive via extension-side progress notifications.
   const extra: RequestHandlerExtra = {
-    signal: AbortSignal.timeout(300_000),
+    signal: AbortSignal.timeout(1_800_000),
     sendNotification: () => Promise.resolve(),
   };
 
@@ -1068,7 +1073,7 @@ const createHandleFetch =
     if (url.pathname === '/audit' && req.method === 'GET') return handleAudit(url, state, req);
     if (url.pathname === '/tools' && req.method === 'GET') return handleListTools(req, url, state);
     if (url.pathname.startsWith('/tools/') && url.pathname.endsWith('/call') && req.method === 'POST')
-      return handleToolCall(req, url, state, sessionServers);
+      return handleToolCall(req, url, state, server, sessionServers);
     if (url.pathname === '/reload' && req.method === 'POST')
       return handleReload(req, state, sessionServers, transports);
     if (url.pathname === '/extension/reload' && req.method === 'POST') return handleExtensionReload(req, state);

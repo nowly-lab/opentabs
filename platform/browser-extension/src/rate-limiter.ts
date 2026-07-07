@@ -16,16 +16,16 @@ interface RateLimitConfig {
 /** Per-method rate limit configuration */
 const METHOD_LIMITS: ReadonlyMap<string, RateLimitConfig> = new Map([
   // Expensive operations — tight limits
-  ['browser.screenshotTab', { maxRequests: 2, windowMs: 1_000 }],
+  ['browser.screenshotTab', { maxRequests: 10, windowMs: 1_000 }],
   ['browser.enableNetworkCapture', { maxRequests: 2, windowMs: 1_000 }],
-  ['browser.executeScript', { maxRequests: 15, windowMs: 1_000 }],
+  ['browser.executeScript', { maxRequests: 100, windowMs: 1_000 }],
 
   // Tool dispatch — allow bursts of sequential/concurrent tool calls from agents
-  ['tool.dispatch', { maxRequests: 30, windowMs: 1_000 }],
+  ['tool.dispatch', { maxRequests: 200, windowMs: 1_000 }],
 ]);
 
 /** Default limit for methods without a specific config */
-const DEFAULT_LIMIT: RateLimitConfig = { maxRequests: 20, windowMs: 1_000 };
+const DEFAULT_LIMIT: RateLimitConfig = { maxRequests: 100, windowMs: 1_000 };
 
 /**
  * Methods exempt from rate limiting. These are control/lifecycle methods that
