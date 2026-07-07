@@ -36,9 +36,10 @@ describe('checkRateLimit', () => {
   });
 
   describe('method-specific limits', () => {
-    test('browser.screenshotTab allows 2 per second', () => {
-      expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
-      expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
+    test('browser.screenshotTab allows 10 per second', () => {
+      for (let i = 0; i < 10; i++) {
+        expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
+      }
       expect(checkRateLimit('browser.screenshotTab', now)).toBe(false);
     });
 
@@ -48,15 +49,15 @@ describe('checkRateLimit', () => {
       expect(checkRateLimit('browser.enableNetworkCapture', now)).toBe(false);
     });
 
-    test('browser.executeScript allows 15 per second', () => {
-      for (let i = 0; i < 15; i++) {
+    test('browser.executeScript allows 100 per second', () => {
+      for (let i = 0; i < 100; i++) {
         expect(checkRateLimit('browser.executeScript', now)).toBe(true);
       }
       expect(checkRateLimit('browser.executeScript', now)).toBe(false);
     });
 
-    test('tool.dispatch allows 30 per second', () => {
-      for (let i = 0; i < 30; i++) {
+    test('tool.dispatch allows 200 per second', () => {
+      for (let i = 0; i < 200; i++) {
         expect(checkRateLimit('tool.dispatch', now)).toBe(true);
       }
       expect(checkRateLimit('tool.dispatch', now)).toBe(false);
@@ -64,8 +65,8 @@ describe('checkRateLimit', () => {
   });
 
   describe('default limit', () => {
-    test('unconfigured method allows 20 per second', () => {
-      for (let i = 0; i < 20; i++) {
+    test('unconfigured method allows 100 per second', () => {
+      for (let i = 0; i < 100; i++) {
         expect(checkRateLimit('browser.listTabs', now)).toBe(true);
       }
       expect(checkRateLimit('browser.listTabs', now)).toBe(false);
@@ -76,6 +77,9 @@ describe('checkRateLimit', () => {
     test('requests allowed again after window passes', () => {
       expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
       expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
+      for (let i = 0; i < 8; i++) {
+        expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
+      }
       expect(checkRateLimit('browser.screenshotTab', now)).toBe(false);
 
       // Advance past the 1-second window
@@ -87,13 +91,13 @@ describe('checkRateLimit', () => {
 
   describe('boundary conditions', () => {
     test('exactly at limit is allowed', () => {
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 100; i++) {
         expect(checkRateLimit('browser.listTabs', now)).toBe(true);
       }
     });
 
     test('one over limit is rejected', () => {
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 100; i++) {
         checkRateLimit('browser.listTabs', now);
       }
       expect(checkRateLimit('browser.listTabs', now)).toBe(false);
@@ -137,6 +141,9 @@ describe('checkRateLimit', () => {
     test('different methods have independent limits', () => {
       expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
       expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
+      for (let i = 0; i < 8; i++) {
+        expect(checkRateLimit('browser.screenshotTab', now)).toBe(true);
+      }
       expect(checkRateLimit('browser.screenshotTab', now)).toBe(false);
 
       // executeScript should still be available (separate counter)
