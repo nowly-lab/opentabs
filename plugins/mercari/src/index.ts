@@ -1,6 +1,7 @@
 import { OpenTabsPlugin } from '@opentabs-dev/plugin-sdk';
 import type { ToolDefinition } from '@opentabs-dev/plugin-sdk';
 import { getItem } from './tools/get-item.js';
+import { loadProfileItems } from './tools/load-profile-items.js';
 import { searchItems } from './tools/search-items.js';
 
 class MercariPlugin extends OpenTabsPlugin {
@@ -9,7 +10,7 @@ class MercariPlugin extends OpenTabsPlugin {
   override readonly displayName = 'Mercari';
   override readonly homepage = 'https://jp.mercari.com/';
   readonly urlPatterns = ['*://jp.mercari.com/*'];
-  readonly tools: ToolDefinition[] = [searchItems, getItem];
+  readonly tools: ToolDefinition[] = [searchItems, getItem, loadProfileItems];
 
   async isReady(): Promise<boolean> {
     return location.hostname === 'jp.mercari.com' && document.readyState !== 'loading';
