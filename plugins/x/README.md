@@ -38,8 +38,8 @@ npm install -g @opentabs-dev/opentabs-plugin-x
 | `quote_tweet` | Post a quote tweet | Write |
 | `delete_tweet` | Delete a tweet | Write |
 | `download_tweet_media` | Save tweet images or videos | Read |
-| `get_tweet_replies` | Get replies to a tweet | Read |
 | `list_tweet_media` | List tweet media URLs | Read |
+| `get_tweet_replies` | Get replies to a tweet | Read |
 | `pin_tweet` | Pin a tweet to your profile | Write |
 | `prepare_tweet_screenshot` | Prepare tweet for screenshot | Read |
 
