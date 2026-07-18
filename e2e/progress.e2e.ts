@@ -6,8 +6,8 @@
  *   - Progress notifications flow through the pipeline and are captured by the client
  *   - Progress fields (progress, total, message) are preserved end-to-end
  *   - Indeterminate progress (progress=0, total=0, message-only) flows through correctly
- *   - Progress resets the dispatch timeout, allowing tools to run past 30s
- *   - Tools without progress still time out at the default 30s/25s
+ *   - Progress resets the dispatch timeout for long-running tools
+ *   - Tool-level request timeouts are returned as structured errors
  *
  * Prerequisites:
  *   - `npm run build` has been run (platform dist/ files exist)
@@ -149,14 +149,13 @@ test.describe('Progress-based timeout extension', () => {
     extensionContext,
     mcpClient,
   }) => {
-    // This test runs for ~35 seconds — well past the default 30s dispatch timeout
+    // This test runs long enough to verify progress keeps the dispatch alive.
     test.slow();
 
     const page = await setupToolTest(mcpServer, testServer, extensionContext, mcpClient);
 
     // 5 steps over 35 seconds — each step at 7s intervals.
-    // Without progress timeout reset, the tool would time out at 25s (extension)
-    // or 30s (server). With progress, each notification resets the timer.
+    // With progress, each notification resets the dispatch timer.
     const start = Date.now();
     const result = await mcpClient.callToolWithProgress(
       'e2e-test__slow_with_progress',
@@ -165,7 +164,7 @@ test.describe('Progress-based timeout extension', () => {
     );
     const elapsed = Date.now() - start;
 
-    // Tool should succeed despite running past 30s
+    // Tool should succeed despite running longer than an ordinary short request.
     expect(result.isError).toBe(false);
     const output = parseToolResult(result.content);
     expect(output.completed).toBe(true);
@@ -181,32 +180,30 @@ test.describe('Progress-based timeout extension', () => {
     await page.close();
   });
 
-  test('tool WITHOUT progress still times out at the default timeout', async ({
+  test('tool WITHOUT progress still returns plugin request timeouts as errors', async ({
     mcpServer,
     testServer,
     extensionContext,
     mcpClient,
   }) => {
-    // This test waits for the 25s extension-side timeout to fire
+    // This test waits for the e2e-test plugin's 30s fetch timeout to fire.
     test.slow();
 
     const page = await setupToolTest(mcpServer, testServer, extensionContext, mcpClient);
 
-    // Set the test server to a 35s delay — echo tool does not report progress,
-    // so it should time out at the extension-side SCRIPT_TIMEOUT_MS (25s)
+    // Set the test server to a 35s delay. The echo tool does not report progress,
+    // but its own request helper times out before the platform dispatch timeout.
     await testServer.setSlow(35_000);
 
     const start = Date.now();
-    const result = await mcpClient.callTool('e2e-test__echo', { message: 'should-timeout' });
+    const result = await mcpClient.callTool('e2e-test__echo', { message: 'should-timeout' }, { timeout: 45_000 });
     const elapsed = Date.now() - start;
 
-    // Should time out with an error
     expect(result.isError).toBe(true);
     expect(result.content.toLowerCase()).toContain('timed out');
 
-    // Should fire around 25s (SCRIPT_TIMEOUT_MS), not be extended
-    expect(elapsed).toBeGreaterThan(20_000);
-    expect(elapsed).toBeLessThan(35_000);
+    expect(elapsed).toBeGreaterThan(29_000);
+    expect(elapsed).toBeLessThan(40_000);
 
     // Reset slow mode for clean teardown
     await testServer.setSlow(0);

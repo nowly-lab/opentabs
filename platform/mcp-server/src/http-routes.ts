@@ -713,7 +713,7 @@ const handleMcp = async (
   const authError = checkBearerAuth(req, state.wsSecret);
   if (authError) return authError;
   // Disable per-connection idle timeout for MCP requests.
-  // Tool dispatches can take up to DISPATCH_TIMEOUT_MS (30s) and the
+  // Tool dispatches can take up to DISPATCH_TIMEOUT_MS and the
   // Streamable HTTP transport holds the response open until the tool
   // result arrives. The default idle timeout (10s) would close the
   // connection before long-running dispatches complete.

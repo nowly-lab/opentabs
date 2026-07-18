@@ -26,6 +26,10 @@ import {
   waitForToolResult,
 } from './helpers.js';
 
+const expectTimeoutLikeError = (content: string): void => {
+  expect(content.toLowerCase()).toMatch(/timed out|aborted/);
+};
+
 // ---------------------------------------------------------------------------
 // Concurrent tool dispatch
 // ---------------------------------------------------------------------------
@@ -381,17 +385,17 @@ test.describe('Tool call during reconnect window', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tool dispatch timeout (extension-side 25s script timeout)
+// Tool dispatch timeout (plugin-side request timeout)
 // ---------------------------------------------------------------------------
 
 test.describe('Tool dispatch timeout', () => {
-  test('tool call exceeding SCRIPT_TIMEOUT_MS returns a clean timeout error', async ({
+  test('tool call exceeding the plugin request timeout returns a clean timeout error', async ({
     mcpServer,
     testServer,
     extensionContext,
     mcpClient,
   }) => {
-    // This test waits 25+ seconds for the timeout to fire
+    // This test waits 30+ seconds for the e2e-test plugin request timeout to fire.
     test.slow();
 
     const page = await setupToolTest(mcpServer, testServer, extensionContext, mcpClient);
@@ -400,21 +404,20 @@ test.describe('Tool dispatch timeout', () => {
     const okOutput = await callToolExpectSuccess(mcpClient, mcpServer, 'e2e-test__echo', { message: 'pre-timeout' });
     expect(okOutput.message).toBe('pre-timeout');
 
-    // Set the test server delay to 27 seconds — longer than SCRIPT_TIMEOUT_MS (25s)
-    // but shorter than DISPATCH_TIMEOUT_MS (30s), so the extension timeout fires first
-    await testServer.setSlow(27_000);
+    // Set the test server delay longer than the e2e-test plugin's 30s fetch timeout.
+    // The platform dispatch timeout is intentionally much longer, so the plugin
+    // should return a structured timeout error before platform dispatch gives up.
+    await testServer.setSlow(35_000);
 
     const start = Date.now();
-    const result = await mcpClient.callTool('e2e-test__echo', { message: 'should-timeout' });
+    const result = await mcpClient.callTool('e2e-test__echo', { message: 'should-timeout' }, { timeout: 45_000 });
     const elapsed = Date.now() - start;
 
-    // The extension-side timeout (25s) should produce a clean error
     expect(result.isError).toBe(true);
-    expect(result.content.toLowerCase()).toContain('timed out');
+    expectTimeoutLikeError(result.content);
 
-    // Should take ~25s (the extension timeout), not 30s (the server timeout)
-    expect(elapsed).toBeGreaterThan(20_000);
-    expect(elapsed).toBeLessThan(29_000);
+    expect(elapsed).toBeGreaterThan(29_000);
+    expect(elapsed).toBeLessThan(40_000);
 
     // Reset slow mode for clean teardown
     await testServer.setSlow(0);
@@ -433,7 +436,7 @@ test.describe('Concurrent tool dispatch timeouts', () => {
     extensionContext,
     mcpClient,
   }) => {
-    // This test waits ~25s for the extension-side SCRIPT_TIMEOUT_MS to fire
+    // This test waits ~30s for the e2e-test plugin request timeout to fire.
     test.slow();
 
     const page = await setupToolTest(mcpServer, testServer, extensionContext, mcpClient);
@@ -444,31 +447,30 @@ test.describe('Concurrent tool dispatch timeouts', () => {
     });
     expect(okOutput.message).toBe('pre-concurrent-timeout');
 
-    // Set the test server delay to 27s — longer than SCRIPT_TIMEOUT_MS (25s)
-    await testServer.setSlow(27_000);
+    // Set the test server delay longer than the e2e-test plugin's 30s fetch timeout.
+    await testServer.setSlow(35_000);
 
     // Fire 3 concurrent tool calls that will all time out
     const start = Date.now();
     const results = await Promise.allSettled([
-      mcpClient.callTool('e2e-test__echo', { message: 'timeout-1' }),
-      mcpClient.callTool('e2e-test__echo', { message: 'timeout-2' }),
-      mcpClient.callTool('e2e-test__echo', { message: 'timeout-3' }),
+      mcpClient.callTool('e2e-test__echo', { message: 'timeout-1' }, { timeout: 45_000 }),
+      mcpClient.callTool('e2e-test__echo', { message: 'timeout-2' }, { timeout: 45_000 }),
+      mcpClient.callTool('e2e-test__echo', { message: 'timeout-3' }, { timeout: 45_000 }),
     ]);
     const elapsed = Date.now() - start;
 
-    // All 3 should resolve (not reject) — the MCP protocol returns timeout
-    // as a tool result with isError: true, not as a transport-level failure.
+    // All 3 should resolve (not reject): plugin-level timeout errors are
+    // returned as tool results with isError: true.
     for (const result of results) {
       expect(result.status).toBe('fulfilled');
       if (result.status !== 'fulfilled') throw new Error('Expected fulfilled');
       expect(result.value.isError).toBe(true);
-      expect(result.value.content.toLowerCase()).toContain('timed out');
+      expectTimeoutLikeError(result.value.content);
     }
 
-    // All calls should time out around the same time (~25s SCRIPT_TIMEOUT_MS),
-    // not sequentially (which would be ~75s)
-    expect(elapsed).toBeGreaterThan(20_000);
-    expect(elapsed).toBeLessThan(40_000);
+    // All calls should time out around the same time, not sequentially.
+    expect(elapsed).toBeGreaterThan(29_000);
+    expect(elapsed).toBeLessThan(45_000);
 
     // Reset slow mode and verify a subsequent normal tool call works
     await testServer.setSlow(0);
