@@ -90,6 +90,16 @@ const didReaderPositionChange = (before: ReaderPosition, after: ReaderPosition):
   return comparableKeys.some(key => before[key] !== after[key]);
 };
 
+const screenshotSignature = (base64: string): string => {
+  const middle = Math.floor(base64.length / 2);
+  return [
+    base64.length,
+    base64.slice(0, 256),
+    base64.slice(Math.max(0, middle - 128), middle + 128),
+    base64.slice(-256),
+  ].join(':');
+};
+
 const dispatchMouseEvent = (target: Element, type: string, x: number, y: number): void => {
   target.dispatchEvent(
     new MouseEvent(type, {
@@ -355,7 +365,9 @@ export const saveAllPagesFromFirst = defineTool({
     files: z.array(z.string()),
     width: z.number().optional(),
     height: z.number().optional(),
-    stop_reason: z.enum(['max_pages', 'url_changed', 'end_tray', 'position_unchanged']).optional(),
+    stop_reason: z
+      .enum(['max_pages', 'url_changed', 'end_tray', 'position_unchanged', 'duplicate_screenshot'])
+      .optional(),
     final_url: z.string().optional(),
   }),
   handle: async (params, context) => {
@@ -382,7 +394,14 @@ export const saveAllPagesFromFirst = defineTool({
     const progressTotal = Number.isFinite(limit) ? limit : 0;
     const savedFiles: string[] = [];
     let lastDimensions: { width: number; height: number } | undefined;
-    let stopReason: 'max_pages' | 'url_changed' | 'end_tray' | 'position_unchanged' | undefined;
+    let previousScreenshotSignature: string | undefined;
+    let stopReason:
+      | 'max_pages'
+      | 'url_changed'
+      | 'end_tray'
+      | 'position_unchanged'
+      | 'duplicate_screenshot'
+      | undefined;
 
     if (params.start_at_first !== false) {
       await goToPosition(1, params.ready_timeout_ms ?? 25000);
@@ -416,12 +435,19 @@ export const saveAllPagesFromFirst = defineTool({
         stopReason = 'url_changed';
         break;
       }
+      const currentScreenshotSignature = screenshotSignature(currentBase64);
+      // Some Kindle end states leave page chrome unreadable; identical screenshots mean the turn did not advance.
+      if (previousScreenshotSignature === currentScreenshotSignature) {
+        stopReason = 'duplicate_screenshot';
+        break;
+      }
 
       const pagePart = String(page).padStart(String(totalPages).length, '0');
       const filename = `${seriesTitle}/${volumeNumber}/files/${safePrefix}-${runId}-p${pagePart}-of-${totalPages}.png`;
       lastDimensions = await getPngDimensions(currentBase64);
       await screenshotDownloadContext.downloadBase64File(currentBase64, filename, 'image/png');
       savedFiles.push(filename);
+      previousScreenshotSignature = currentScreenshotSignature;
       context?.reportProgress({ progress: offset + 1, total: progressTotal, message: filename });
 
       if (offset + 1 >= limit) {
