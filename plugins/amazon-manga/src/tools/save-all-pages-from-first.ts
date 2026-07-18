@@ -58,7 +58,37 @@ const hasVisibleSurface = (): boolean =>
     return rect.width > 40 && rect.height > 40 && visibleArea(rect) > 0;
   });
 
-const hasEndTray = (): boolean => isVisible(document.querySelector('.tray-container.tray-animating-enter-done'));
+const hasEndTray = (): boolean =>
+  Array.from(document.querySelectorAll('.tray-container, [class*="tray-container"]')).some(element => {
+    const rect = element.getBoundingClientRect();
+    return isVisible(element) && visibleArea(rect) > 20_000 && rect.right > window.innerWidth * 0.75;
+  });
+
+interface ReaderPosition {
+  currentPage?: number;
+  percent?: number;
+  sliderValue?: number;
+}
+
+const readReaderPosition = (): ReaderPosition => {
+  const sliderValue = Number.parseInt(document.querySelector<HTMLInputElement>('#sliderBar')?.value ?? '', 10);
+  return {
+    currentPage: readIntegerText('#pageInfoCurrentPage'),
+    percent: readIntegerText('#pageInfoPercent'),
+    sliderValue: Number.isFinite(sliderValue) ? sliderValue : undefined,
+  };
+};
+
+const hasComparablePosition = (position: ReaderPosition): boolean =>
+  position.currentPage !== undefined || position.percent !== undefined || position.sliderValue !== undefined;
+
+const didReaderPositionChange = (before: ReaderPosition, after: ReaderPosition): boolean => {
+  const comparableKeys = (['currentPage', 'percent', 'sliderValue'] as const).filter(
+    key => before[key] !== undefined && after[key] !== undefined,
+  );
+  if (comparableKeys.length === 0) return true;
+  return comparableKeys.some(key => before[key] !== after[key]);
+};
 
 const dispatchMouseEvent = (target: Element, type: string, x: number, y: number): void => {
   target.dispatchEvent(
@@ -325,7 +355,7 @@ export const saveAllPagesFromFirst = defineTool({
     files: z.array(z.string()),
     width: z.number().optional(),
     height: z.number().optional(),
-    stop_reason: z.enum(['max_pages', 'url_changed', 'end_tray']).optional(),
+    stop_reason: z.enum(['max_pages', 'url_changed', 'end_tray', 'position_unchanged']).optional(),
     final_url: z.string().optional(),
   }),
   handle: async (params, context) => {
@@ -352,7 +382,7 @@ export const saveAllPagesFromFirst = defineTool({
     const progressTotal = Number.isFinite(limit) ? limit : 0;
     const savedFiles: string[] = [];
     let lastDimensions: { width: number; height: number } | undefined;
-    let stopReason: 'max_pages' | 'url_changed' | 'end_tray' | undefined;
+    let stopReason: 'max_pages' | 'url_changed' | 'end_tray' | 'position_unchanged' | undefined;
 
     if (params.start_at_first !== false) {
       await goToPosition(1, params.ready_timeout_ms ?? 25000);
@@ -368,6 +398,11 @@ export const saveAllPagesFromFirst = defineTool({
         break;
       }
       if (hasEndTray()) {
+        if (savedFiles.length === 0) {
+          throw ToolError.validation(
+            'End tray is visible before any manga page was saved; reader did not reset to start.',
+          );
+        }
         stopReason = 'end_tray';
         break;
       }
@@ -394,6 +429,7 @@ export const saveAllPagesFromFirst = defineTool({
         break;
       }
 
+      const positionBeforeTurn = readReaderPosition();
       await turnOnePage({
         xOffset: params.turn_x_offset ?? 58,
         yRatio: params.turn_y_ratio ?? 0.5,
@@ -407,6 +443,14 @@ export const saveAllPagesFromFirst = defineTool({
       }
       if (hasEndTray()) {
         stopReason = 'end_tray';
+        break;
+      }
+      const positionAfterTurn = readReaderPosition();
+      if (
+        hasComparablePosition(positionBeforeTurn) &&
+        !didReaderPositionChange(positionBeforeTurn, positionAfterTurn)
+      ) {
+        stopReason = 'position_unchanged';
         break;
       }
     }
